@@ -1,2 +1,3 @@
 # suspender
-Automatically suspend backlisted processes whenever a game is running (and then resume them when the game stops running)
+
+Automatically minimise and suspend blacklisted processes whenever certain trigger processes (e.g. video games) are running, and then resume them when they stop running.
