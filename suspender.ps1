@@ -4,6 +4,7 @@ $processesToSuspend = @(
     "chrome",
     "Spotify",
     "WhatsApp",
+    "Signal",
     #"GoogleDriveFS", # seems to crash Explorer related stuff
     "notepad"   # for testing purposes, notepad is considered a process to suspend
 )
@@ -17,11 +18,16 @@ $gameProcessNames = @(
     "gw2-64",
     "Fortnite-Client-Win64-Shipping",  # doesn't seem to work, maybe as it runs as admin?
     "FortniteLauncher",
-    "CalculatorApp"  # for testing purposes, Calculator is considered a game
+    "CalculatorApp",  # for testing purposes, Calculator is considered a game
+    "Time"  # for testing purposes, the Clock app ("Time.exe") is considered a game
 )
 
 
+# this will enable/disable the display of Write-Debug messages
+#$DebugPreference = 'Continue'   #SilentlyContinue is the default
+
 # Add necessary .NET assemblies for API calls
+# using Add-Type cmdlet (C# code)
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -50,7 +56,6 @@ public class ProcessManager
     private static extern bool IsWindowVisible(IntPtr hWnd);
 
     public const int SW_MINIMIZE = 6;
-
 
 
     public static void SuspendProcess(int pid)
@@ -88,13 +93,15 @@ public class ProcessManager
     public static int MinimizeProcessWindows(int pid)
     {
         var minimisedWindows = 0;
-        var process = System.Diagnostics.Process.GetProcessById(pid);
 
-        if (IsWindowVisible(process.MainWindowHandle))
-        {
-            ShowWindow(process.MainWindowHandle, SW_MINIMIZE);
-            minimisedWindows++;
-        }
+        // minimises the main window handle
+        // unnecessary as this window will be minimised below
+        //var process = System.Diagnostics.Process.GetProcessById(pid);
+        //if (IsWindowVisible(process.MainWindowHandle))
+        //{
+        //    ShowWindow(process.MainWindowHandle, SW_MINIMIZE);
+        //    minimisedWindows++;
+        //}
 
         // minimize other windows of the process
         foreach (var window in System.Diagnostics.Process.GetProcesses())
@@ -111,6 +118,10 @@ public class ProcessManager
 }
 "@
 
+Write-Host "--------------"
+Write-Host "Suspender v0.1"
+Write-Host "--------------"
+Write-Host ""
 
 # should we run once or constantly?
 $checkOnce = $false
@@ -125,6 +136,7 @@ if ($args -contains "--check-once") {
 $suspendedProcesses = @()
 
 try {
+
     while ($true) {
 
         $runningGameProcesses = Get-Process | Where-Object { $gameProcessNames -contains $_.Name }
@@ -135,24 +147,28 @@ try {
                 Write-Host "**** Game detected: $($runningGameProcess.Name) ($($runningGameProcess.Id))"
             }
 
-            # Suspend processes from the blacklist
+            # Minimise and suspend processes from the blacklist
             foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name }) {
-                try {
 
-                    #Write-Host "MainWindowHandle for $($proc.Name): $($proc.MainWindowHandle)"
+                try {
+                    Write-Debug "MainWindowHandle for $($proc.Name): $($proc.MainWindowHandle)"
                     $minimisedWindows = [ProcessManager]::MinimizeProcessWindows($proc.Id)
 
                     if ($minimisedWindows) {
-                        Write-Host "Minimised: $($proc.Name) ($($proc.Id)) [$($minimisedWindows) windows]"
+                        Write-Host "Minimised: $($proc.Name) ($($proc.Id)) [$($minimisedWindows) window(s)]"
                     }
+                } catch {
+                    Write-Host "!!!! Failed to minimise: $($proc.Name) ($($proc.Id)). Error: $_"
+                }
 
+                try {
                     [ProcessManager]::SuspendProcess($proc.Id)
                     Write-Host "Suspended: $($proc.Name) ($($proc.Id))"
 
                     # Store suspended process details..
                     $suspendedProcesses += [PSCustomObject]@{ Name = $proc.Name; Id = $proc.Id }
                 } catch {
-                    Write-Host "!!!! Failed to minimise/suspend: $($proc.Name) ($($proc.Id)). Error: $_"
+                    Write-Host "!!!! Failed to suspend: $($proc.Name) ($($proc.Id)). Error: $_"
                 }
             }
 
@@ -163,6 +179,10 @@ try {
                 Write-Host "[Exited]"
             }
 
+            # FIXME: if you open a game and then you open another game before closing the first, closing the first
+            # will result in resuming the suspended processes and then, 2s later, suspending them all again
+            # which isn't very efficient.  However most people don't run multiple games at once so 
+            # this isn't a priority to fix
 
             # Resume suspended processes
             foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name }) {
@@ -175,7 +195,8 @@ try {
                 }
             }
             $suspendedProcesses = @()  # Reset the array to an empty state
-            # this is a bit hacky in case some didn't resume properly but if they didn't, what are we going to do about it anyway?
+            # this is a bit hacky in case some didn't resume properly but if they didn't,
+            # what are we going to do about it anyway?
 
             if (!$checkOnce) {
                 Write-Host "Listening for game processes..."
