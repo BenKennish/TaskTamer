@@ -1,22 +1,21 @@
-# Define the list of processes to suspend
+# Define the list of processes to suspend (without .exe)
 $processesToSuspend = @(
-    "brave",    # Replace with the actual process names (without .exe)
+    "brave",
     "chrome",
     "Spotify",
     "WhatsApp",
-    #"GoogleDriveFS", # seems to crashe Explorer related stuff
-    "notepad"   # for testing purposes, notepad is considered a process worth of suspension
+    #"GoogleDriveFS", # seems to crash Explorer related stuff
+    "notepad"   # for testing purposes, notepad is considered a process to suspend
 )
 
 # TODO: allow defining a whitelist of processes NOT to suspend and we do suspend everything else
+# TODO: if user gives focus to any suspended process (before game has been closed), resume it temporarily.
 
-# TODO: if user gives focus to any suspended process, resume it temporarily.
-
-# Define the list of game process names to check
+# Define the list of game process names (without ".exe") to check
 $gameProcessNames = @(
-    "Overwatch",  # Replace with your game's process name (without .exe)
+    "Overwatch",
     "gw2-64",
-    "Fortnite-Client-Win64-Shipping",  # runs as admin
+    "Fortnite-Client-Win64-Shipping",  # doesn't seem to work, maybe as it runs as admin?
     "FortniteLauncher",
     "CalculatorApp"  # for testing purposes, Calculator is considered a game
 )
@@ -43,13 +42,16 @@ public class ProcessManager
 
     private const int THREAD_SUSPEND_RESUME = 0x0002;
 
-    [DllImport("user32.dll")]
-    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     [DllImport("user32.dll")]
-    public static extern bool IsWindowVisible(IntPtr hWnd);
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
 
     public const int SW_MINIMIZE = 6;
+
+
 
     public static void SuspendProcess(int pid)
     {
@@ -83,17 +85,28 @@ public class ProcessManager
         }
     }
 
-    public static bool MinimizeProcessWindow(int pid)
+    public static int MinimizeProcessWindows(int pid)
     {
+        var minimisedWindows = 0;
         var process = System.Diagnostics.Process.GetProcessById(pid);
 
         if (IsWindowVisible(process.MainWindowHandle))
         {
             ShowWindow(process.MainWindowHandle, SW_MINIMIZE);
-            return true;  // Window was minimized
+            minimisedWindows++;
         }
 
-        return false;  // No window was minimized
+        // minimize other windows of the process
+        foreach (var window in System.Diagnostics.Process.GetProcesses())
+        {
+            if (window.Id == pid && IsWindowVisible(window.MainWindowHandle))
+            {
+                ShowWindow(window.MainWindowHandle, SW_MINIMIZE);
+                minimisedWindows++;
+            }
+        }
+
+        return minimisedWindows;
     }
 }
 "@
@@ -126,8 +139,11 @@ try {
             foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name }) {
                 try {
 
-                    if ([ProcessManager]::MinimizeProcessWindow($proc.Id)) {
-                        Write-Host "Minimized: $($proc.Name) (PID $($proc.Id))"
+                    #Write-Host "MainWindowHandle for $($proc.Name): $($proc.MainWindowHandle)"
+                    $minimisedWindows = [ProcessManager]::MinimizeProcessWindows($proc.Id)
+
+                    if ($minimisedWindows) {
+                        Write-Host "Minimised: $($proc.Name) ($($proc.Id)) [$($minimisedWindows) windows]"
                     }
 
                     [ProcessManager]::SuspendProcess($proc.Id)
