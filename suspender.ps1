@@ -10,7 +10,6 @@ $processesToSuspend = @(
 )
 
 # TODO: show a pause icon in notification area when suspending and a play icon when resuming
-# TODO: run user configurable list of commands when detecting a game
 # TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
 #       note: very likely to suspend things that will cause problems tho
 # TODO: if user gives focus to any suspended process (before game has been closed), resume it temporarily.
@@ -30,8 +29,19 @@ $gameProcessNames = @(
     "Time"  # for testing purposes, the Clock app ("Time.exe") is considered a game
 )
 
+
+# TODO: run user configurable list of commands when detecting a game
+$cmdsToRunOnGameLaunch = @(
+    "wsl --shutdown"
+)
+
 # this will enable/disable the display of Write-Debug messages
 #$DebugPreference = 'Continue'   #SilentlyContinue is the default
+
+# map PIDs to RAM usages
+$pidRAMUsages = @{
+    0 = 42
+}
 
 
 # Add necessary .NET assemblies for API calls
@@ -173,7 +183,16 @@ function Resume-Processes
         try 
         {
             [ProcessManager]::ResumeProcess($proc.Id)
-            Write-Output "Resumed: $($proc.Name) ($($proc.Id))"
+
+            $prevRamUsage = $pidRAMUsages[$proc.Id]
+            $ramUsage = Get-WorkingSetMB $proc
+
+            $delta = $ramUsage - $prevRamUsage
+
+            # TODO: keep track of total delta over all processes
+
+            Write-Output "Resumed: $($proc.Name) ($($proc.Id)) - $($ramUsage)MB RAM [delta: $($delta.ToString("+#;-#;0"))MB]"
+
             # FIXME: processes suspended from a previous iteration of the script 
             # (e.g. interupted by Ctrl-C before the script does the resuming)
             # don't seem to resume ok and idk why.  maybe cos a different process suspended them?
@@ -187,9 +206,21 @@ function Resume-Processes
 }
 
 
+function Get-WorkingSetMB
+{
+    param (
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process] $Process
+    )
+
+    return [math]::round($Process.WorkingSet64 / 1MB, 1)
+}
+
+
 function Install-and-Import-Module
 {
     param(
+        [Parameter(Mandatory = $true)]
         [string]$Name
     )
 
@@ -328,8 +359,11 @@ try
             {
                 try
                 {
+                    $ramUsage = Get-WorkingSetMB $proc
+                    $pidRAMUsages[$proc.Id] = $ramUsage
+
                     [ProcessManager]::SuspendProcess($proc.Id)
-                    Write-Output "Suspended: $($proc.Name) ($($proc.Id))"
+                    Write-Output "Suspended: $($proc.Name) ($($proc.Id)) - $($ramUsage)MB RAM"
 
                     # Store suspended process details..
                     $suspendedProcesses += [PSCustomObject]@{ Name = $proc.Name; Id = $proc.Id }
