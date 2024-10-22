@@ -9,29 +9,37 @@ $processesToSuspend = @(
     "notepad"   # for testing purposes, notepad is considered a process to suspend
 )
 
+# TODO: show a pause icon in notification area when suspending and a play icon when resuming
+# TODO: run user configurable list of commands when detecting a game
 # TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
-#       very likely to suspend things that will cause problems tho
+#       note: very likely to suspend things that will cause problems tho
 # TODO: if user gives focus to any suspended process (before game has been closed), resume it temporarily.
+#       this gets quite complicated to do in a way that doesn't potentially increase load on the system
+#       as it can require repeatedly polling in a while() loop
+#       OR perhaps just detect when a game loses focus and then unsuspend and resuspend when it gains focus again
+
 
 # Define the list of game process names (without ".exe") to check
 $gameProcessNames = @(
     "Overwatch",
     "Fortnite-Client-Win64-Shipping",  # doesn't seem to work, maybe as it runs as admin?
     "FortniteLauncher",
+    "RocketLeague",
     "gw2-64",
     "CalculatorApp",  # for testing purposes, Calculator is considered a game
     "Time"  # for testing purposes, the Clock app ("Time.exe") is considered a game
 )
 
-
 # this will enable/disable the display of Write-Debug messages
 #$DebugPreference = 'Continue'   #SilentlyContinue is the default
+
 
 # Add necessary .NET assemblies for API calls
 # using Add-Type cmdlet (C# code)
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 public class ProcessManager
 {
@@ -83,6 +91,7 @@ public class ProcessManager
         }
     }
 
+
     public static void ResumeProcess(int pid)
     {
         var process = System.Diagnostics.Process.GetProcessById(pid);
@@ -107,6 +116,7 @@ public class ProcessManager
         }
     }
 
+
     public static int MinimizeProcessWindows(int pid)
     {
         var minimisedWindows = 0;
@@ -117,8 +127,16 @@ public class ProcessManager
 
         if (process.MainWindowHandle != IntPtr.Zero) // && !IsIconic(process.MainWindowHandle))
         {
-            ShowWindow(process.MainWindowHandle, SW_MINIMIZE);
-            minimisedWindows++;
+            if (!ShowWindow(process.MainWindowHandle, SW_MINIMIZE))
+            {
+                //Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                int errorCode = Marshal.GetLastWin32Error();
+                Console.WriteLine("Failed to minimize window for process "+process.ProcessName+". Error code: "+errorCode);
+            }
+            else
+            {
+                minimisedWindows++;
+            }
         }
 
         // minimize other windows of the process
@@ -126,11 +144,16 @@ public class ProcessManager
         foreach (var window in System.Diagnostics.Process.GetProcesses())
         {
             if (window.Id == pid
-                && window.MainWindowHandle != IntPtr.Zero 
+                && window.MainWindowHandle != IntPtr.Zero
                 //&& !IsIconic(window.MainWindowHandle)
                 )
             {
-                ShowWindow(window.MainWindowHandle, SW_MINIMIZE);
+                if (!ShowWindow(window.MainWindowHandle, SW_MINIMIZE))
+                {
+                    //Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                    int errorCode = Marshal.GetLastWin32Error();
+                    Console.WriteLine("Failed to minimize window for process "+process.ProcessName+". Error code: "+errorCode);
+                }
                 minimisedWindows++;
             }
         }
@@ -142,7 +165,8 @@ public class ProcessManager
 
 
 
-function Resume-Processes {
+function Resume-Processes
+{
 
     foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name }) 
     {
@@ -161,6 +185,44 @@ function Resume-Processes {
         }
     }
 }
+
+
+function Install-and-Import-Module
+{
+    param(
+        [string]$Name
+    )
+
+    if (-not (Get-Module -ListAvailable -Name $Name -ErrorAction SilentlyContinue))
+    {
+        try
+        {
+            Install-Module -Name $Name -Scope CurrentUser -Force -ErrorAction Stop
+            Write-Output "Module $Name installed successfully."
+        }
+        catch
+        {
+            Write-Error "Failed to install $Name module. Exiting script."
+            exit 1
+        }
+    }
+
+    Import-Module $Name
+
+    if (-not (Get-Module -Name $Name))
+    {
+        Write-Error "Failed to import $Name module. Exiting script."
+        exit 1
+    }
+    else
+    {
+        Write-Output "$Name module is installed and imported."
+    }
+}
+
+
+
+Install-and-Import-Module -Name "BurntToast"
 
 
 # change window appearance
@@ -200,6 +262,15 @@ else
 $suspendedProcesses = @()
 
 
+
+# Get the path of the folder where the script is located
+$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# Define the full path to the icon file
+$iconPath = Join-Path -Path $scriptDirectory -ChildPath "pause.ico"
+
+
+
 try 
 {
     while ($true)
@@ -208,10 +279,27 @@ try
 
         if ($runningGameProcesses)
         {
+            ## show a notification without using BurntToast module
+            #[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            #$Template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
+            #$XML = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($Template)
+            #
+            # Set notification text
+            #$TextNodes = $XML.GetElementsByTagName("text")
+            #$TextNodes.Item(0).AppendChild($XML.CreateTextNode("Game Detected")) | Out-Null
+            #$TextNodes.Item(1).AppendChild($XML.CreateTextNode("The suspender script has detected a game!")) | Out-Null
+            #
+            # Create and display the notification
+            #$Toast = [Windows.UI.Notifications.ToastNotification]::new($XML)
+            #$Notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("PowerShell Script")
+            #$Notifier.Show($Toast)
+            #
+            # it's so yucky that i just decided to use BurntToast as above and below
 
             foreach ($runningGameProcess in $runningGameProcesses) 
             {
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Game detected: $($runningGameProcess.Name) ($($runningGameProcess.Id))"
+                New-BurntToastNotification -Text "Game detected: $($runningGameProcess.Name)", "Suspender is minimising and suspending processes to improve performance." -AppLogo $iconPath
             }
 
             # Minimise windows of all processes in the blacklist
@@ -256,10 +344,12 @@ try
             # Wait for the game(s) to exit
             foreach ($runningGameProcess in $runningGameProcesses)
             {
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for game $($runningGameProcess.Name) ($($runningGameProcess.Id)) to exit... "
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for game $($runningGameProcess.Name) ($($runningGameProcess.Id)) to exit..."
                 $runningGameProcess.WaitForExit()
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Exited"
             }
+
+            New-BurntToastNotification -Text "No running game detected", "Suspender is resuming processes." -AppLogo $iconPath
 
             # FIXME: if you open a game and then you open another game before closing the first, closing the first
             # will result in resuming the suspended processes and then, 2s later, suspending them all again
@@ -292,6 +382,12 @@ try
         Start-Sleep -Seconds 2
     }
 }
+catch 
+{
+    Write-Host "An error occurred: $_"
+    Write-Host "Press Enter to exit."
+    Read-Host
+}
 finally
 {
     Write-Output "[$(Get-Date -Format 'HH:mm')] Shutting down..."
@@ -302,4 +398,10 @@ finally
         [ProcessManager]::ResumeProcess($suspendedProcess.Id)
         Write-Output "Resumed: $($suspendedProcess.Name) ($($suspendedProcess.Id))"
     }
+
+    # reset window appearance?
+    #$Host.UI.RawUI.BackgroundColor = 'DarkMagenta'
+    #$Host.UI.RawUI.ForegroundColor = 'White'
+    #Clear-Host  # Clear the console to apply the new colors
+
 }

@@ -1,13 +1,18 @@
 # Compile the PowerShell script into a native .exe
 # Feel free to use suspender.bat or even launch the suspender.ps1 script directly if you prefer
 
-if (-not (Test-Path "suspender.exe")) {
+if (-not (Test-Path "suspender.exe"))
+{
+    $compilerAlreadyInstalled = $false
 
-    if (-not (Get-Module -ListAvailable -Name PS2EXE)) {
-        Write-Output "Installing PS2EXE for current user..."
-        # install the PS2EXE 'compiler' for the current user
+    if (-not (Get-Module -ListAvailable -Name PS2EXE))
+    {
+        Write-Output "Installing PS2EXE compiler for current user..."
         Install-Module -Scope CurrentUser -Name PS2EXE -Force
-    } else {
+    }
+    else
+    {
+        $compilerAlreadyInstalled = $true
         Write-Output "PS2EXE is already available for use."
     }
 
@@ -15,9 +20,18 @@ if (-not (Test-Path "suspender.exe")) {
     Write-Output "Compiling..."
     Invoke-PS2EXE -InputFile "suspender.ps1" -OutputFile "suspender.exe" -IconFile "pause.ico"
 
-} else {
+    if (-not ($compilerAlreadyInstalled))
+    {
+        # remove +compiler
+        Write-Output "Removing PS2EXE..."
+        Uninstall-Module -Name PS2EXE -Force
+    }
+
+}
+else
+{
 
     Write-Output "suspender.exe already exists. Exiting."
 }
 
-Start-Sleep -Seconds 2
+#Start-Sleep -Seconds 1

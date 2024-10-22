@@ -1,2 +1,3 @@
 # files for git to ignore
-suspender.exe
+*.exe
+*.lnk
