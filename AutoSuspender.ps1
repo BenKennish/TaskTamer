@@ -359,8 +359,8 @@ try
 
             foreach ($runningGameProcess in $runningGameProcesses) 
             {
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Game detected: $($runningGameProcess.Name) ($($runningGameProcess.Id))"
-                New-BurntToastNotification -Text "Game detected: $($runningGameProcess.Name)", "Suspender is minimising and suspending processes to improve performance." -AppLogo $pauseIconPath
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningGameProcess.Name) ($($runningGameProcess.Id))"
+                New-BurntToastNotification -Text "$($runningGameProcess.Name) detected", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
             }
 
             # Minimise windows of all target processes
@@ -411,12 +411,12 @@ try
             # Wait for the game(s) to exit
             foreach ($runningGameProcess in $runningGameProcesses)
             {
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for game $($runningGameProcess.Name) ($($runningGameProcess.Id)) to exit..."
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for trigger process $($runningGameProcess.Name) ($($runningGameProcess.Id)) to exit..."
                 $runningGameProcess.WaitForExit()
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Exited"
             }
 
-            New-BurntToastNotification -Text "No running game detected", "Suspender is resuming processes." -AppLogo $playIconPath
+            New-BurntToastNotification -Text "$($runningGameProcess.Name) exited", "AutoSuspender is resuming target processes." -AppLogo $playIconPath
 
             # FIXME: if you open a game and then you open another game before closing the first, closing the first
             # will result in resuming the suspended processes and then, 2s later, suspending them all again
