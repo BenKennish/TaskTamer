@@ -1,4 +1,4 @@
-# Define the list of processes to suspend (without .exe)
+# List of names of processes (without ".exe") to suspend a.k.a. target processes
 $processesToSuspend = @(
     "brave",
     "chrome",
@@ -18,15 +18,14 @@ $processesToSuspend = @(
 #       OR perhaps just detect when a game loses focus and then unsuspend and resuspend when it gains focus again
 
 
-# Define the list of game process names (without ".exe") to check
+# List of names of processes (without ".exe") to check, a.k.a. trigger processes (e.g. video games)
 $gameProcessNames = @(
     "Overwatch",
-    "Fortnite-Client-Win64-Shipping",  # doesn't seem to work, maybe as it runs as admin?
     "FortniteLauncher",
     "RocketLeague",
     "gw2-64",
-    "CalculatorApp",  # for testing purposes, Calculator is considered a game
-    "Solitaire"  # for testing purposes, the Clock app ("Time.exe") is considered a game
+    "CalculatorApp",  # for testing purposes
+    "Solitaire"  # for testing purposes
 )
 
 
@@ -270,7 +269,7 @@ function Resume-Processes
 
             if ($pidRAMUsages)
             {
-                Write-Output "Resumed: $($proc.Name) ($($proc.Id)) - $($currRamUsageHR) RAM [change: $($deltaHR)]"
+                Write-Output "Resumed: $($proc.Name) ($($proc.Id)) - $($currRamUsageHR) RAM [$($deltaHR)]"
             }
             else
             {
@@ -293,9 +292,6 @@ function Resume-Processes
 }
 
 
-
-
-
 Install-and-Import-Module -Name "BurntToast"
 
 
@@ -304,12 +300,10 @@ $Host.UI.RawUI.BackgroundColor = 'DarkMagenta'
 $Host.UI.RawUI.ForegroundColor = 'White'
 Clear-Host  # Clear the console to apply the new colors
 
-
-Write-Output "/----------------\"
-Write-Output "| Suspender v0.1 |"
-Write-Output "\----------------/"
+Write-Output "/--------------------\"
+Write-Output "| AutoSuspender v0.5 |"
+Write-Output "\--------------------/"
 Write-Output ""
-
 
 if ($args -contains "--resume-all")
 {
@@ -331,10 +325,11 @@ if ($args -contains "--check-once")
 $suspendedProcesses = @()
 
 
-# Define the full path to the icon file
-# Get the path of the folder where the script is located
+# Define the full path to the icon files using 
+# the path of the folder where the script is located
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
-$iconPath = Join-Path -Path $scriptDirectory -ChildPath "pause.ico"
+$pauseIconPath = Join-Path -Path $scriptDirectory -ChildPath "/images/pause.ico"
+$playIconPath = Join-Path -Path $scriptDirectory -ChildPath "/images/play.ico"
 
 # did we sit idle last time around the while() loop?
 $wasIdleLastLoop = $false
@@ -365,10 +360,10 @@ try
             foreach ($runningGameProcess in $runningGameProcesses) 
             {
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Game detected: $($runningGameProcess.Name) ($($runningGameProcess.Id))"
-                New-BurntToastNotification -Text "Game detected: $($runningGameProcess.Name)", "Suspender is minimising and suspending processes to improve performance." -AppLogo $iconPath
+                New-BurntToastNotification -Text "Game detected: $($runningGameProcess.Name)", "Suspender is minimising and suspending processes to improve performance." -AppLogo $pauseIconPath
             }
 
-            # Minimise windows of all processes in the blacklist
+            # Minimise windows of all target processes
             # FIXME: doesn't seem to work for certain apps (e.g. Microsoft Store apps)
             foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name })
             {
@@ -388,9 +383,9 @@ try
             }
 
             # Optional: Wait a short time to ensure minimize commands are processed
-            Start-Sleep -Milliseconds 2000
+            Start-Sleep -Milliseconds 1500
 
-            # Suspend all processes in the blacklist
+            # Suspend all target processes
             foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name })
             {
                 try
@@ -421,7 +416,7 @@ try
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Exited"
             }
 
-            New-BurntToastNotification -Text "No running game detected", "Suspender is resuming processes." -AppLogo $iconPath
+            New-BurntToastNotification -Text "No running game detected", "Suspender is resuming processes." -AppLogo $playIconPath
 
             # FIXME: if you open a game and then you open another game before closing the first, closing the first
             # will result in resuming the suspended processes and then, 2s later, suspending them all again

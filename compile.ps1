@@ -1,7 +1,7 @@
 # Compile the PowerShell script into a native .exe
 # Feel free to use suspender.bat or even launch the suspender.ps1 script directly if you prefer
 
-if (-not (Test-Path "suspender.exe"))
+if (-not (Test-Path "AutoSuspender.exe"))
 {
     $compilerAlreadyInstalled = $false
 
@@ -18,11 +18,11 @@ if (-not (Test-Path "suspender.exe"))
 
     # compile
     Write-Output "Compiling..."
-    Invoke-PS2EXE -InputFile "suspender.ps1" -OutputFile "suspender.exe" -IconFile "pause.ico"
+    Invoke-PS2EXE -InputFile "AutoSuspender.ps1" -OutputFile "AutoSuspender.exe" -IconFile "pause.ico"
 
     if (-not ($compilerAlreadyInstalled))
     {
-        # remove +compiler
+        # remove compiler if we just installed it
         Write-Output "Removing PS2EXE..."
         Uninstall-Module -Name PS2EXE -Force
     }
@@ -31,7 +31,5 @@ if (-not (Test-Path "suspender.exe"))
 else
 {
 
-    Write-Output "suspender.exe already exists. Exiting."
+    Write-Output "AutoSuspender.exe already exists. Exiting."
 }
-
-#Start-Sleep -Seconds 1
