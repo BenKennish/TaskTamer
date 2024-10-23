@@ -26,11 +26,11 @@ $gameProcessNames = @(
     "RocketLeague",
     "gw2-64",
     "CalculatorApp",  # for testing purposes, Calculator is considered a game
-    "Time"  # for testing purposes, the Clock app ("Time.exe") is considered a game
+    "Solitaire"  # for testing purposes, the Clock app ("Time.exe") is considered a game
 )
 
 
-# TODO: run user configurable list of commands when detecting a game
+# TODO: run user configurable list of commands when detecting a game (unimplemented)
 $cmdsToRunOnGameLaunch = @(
     "wsl --shutdown"
 )
@@ -38,9 +38,10 @@ $cmdsToRunOnGameLaunch = @(
 # this will enable/disable the display of Write-Debug messages
 #$DebugPreference = 'Continue'   #SilentlyContinue is the default
 
-# map PIDs to RAM usages
+
+# map process PIDs to RAM (bytes) usages
 $pidRAMUsages = @{
-    0 = 42
+    #e.g 6231 = 38125123
 }
 
 
@@ -129,7 +130,7 @@ public class ProcessManager
 
     public static int MinimizeProcessWindows(int pid)
     {
-        var minimisedWindows = 0;
+        var numWindowsMinimised = 0;
 
         // minimises the main window handle
         // possibly unnecessary as this window will be minimised below anyway
@@ -139,13 +140,13 @@ public class ProcessManager
         {
             if (!ShowWindow(process.MainWindowHandle, SW_MINIMIZE))
             {
-                //Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                int errorCode = Marshal.GetLastWin32Error();
-                Console.WriteLine("Failed to minimize window for process "+process.ProcessName+". Error code: "+errorCode);
+                Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                //int errorCode = Marshal.GetLastWin32Error();
+                //Console.WriteLine("Failed to minimize window for process "+process.ProcessName+". Error code: "+errorCode);
             }
             else
             {
-                minimisedWindows++;
+                numWindowsMinimised++;
             }
         }
 
@@ -160,61 +161,18 @@ public class ProcessManager
             {
                 if (!ShowWindow(window.MainWindowHandle, SW_MINIMIZE))
                 {
-                    //Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                    int errorCode = Marshal.GetLastWin32Error();
-                    Console.WriteLine("Failed to minimize window for process "+process.ProcessName+". Error code: "+errorCode);
+                    Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                    //int errorCode = Marshal.GetLastWin32Error();
+                    //Console.WriteLine("Failed to minimize window for process "+process.ProcessName+". Error code: "+errorCode);
                 }
-                minimisedWindows++;
+                numWindowsMinimised++;
             }
         }
 
-        return minimisedWindows;
+        return numWindowsMinimised;
     }
 }
 "@
-
-
-
-function Resume-Processes
-{
-
-    foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name }) 
-    {
-        try 
-        {
-            [ProcessManager]::ResumeProcess($proc.Id)
-
-            $prevRamUsage = $pidRAMUsages[$proc.Id]
-            $ramUsage = Get-WorkingSetMB $proc
-
-            $delta = $ramUsage - $prevRamUsage
-
-            # TODO: keep track of total delta over all processes
-
-            Write-Output "Resumed: $($proc.Name) ($($proc.Id)) - $($ramUsage)MB RAM [delta: $($delta.ToString("+#;-#;0"))MB]"
-
-            # FIXME: processes suspended from a previous iteration of the script 
-            # (e.g. interupted by Ctrl-C before the script does the resuming)
-            # don't seem to resume ok and idk why.  maybe cos a different process suspended them?
-
-        } 
-        catch 
-        {
-            Write-Error "Failed to resume: $($proc.Name) ($($proc.Id)). Error: $_"
-        }
-    }
-}
-
-
-function Get-WorkingSetMB
-{
-    param (
-        [Parameter(Mandatory = $true)]
-        [System.Diagnostics.Process] $Process
-    )
-
-    return [math]::round($Process.WorkingSet64 / 1MB, 1)
-}
 
 
 function Install-and-Import-Module
@@ -229,11 +187,11 @@ function Install-and-Import-Module
         try
         {
             Install-Module -Name $Name -Scope CurrentUser -Force -ErrorAction Stop
-            Write-Output "Module $Name installed successfully."
+            #Write-Output "Module $Name installed successfully."
         }
         catch
         {
-            Write-Error "Failed to install $Name module. Exiting script."
+            Write-Error "!!! Failed to install $Name module."
             exit 1
         }
     }
@@ -242,14 +200,99 @@ function Install-and-Import-Module
 
     if (-not (Get-Module -Name $Name))
     {
-        Write-Error "Failed to import $Name module. Exiting script."
+        Write-Error "!!! Failed to import $Name module."
         exit 1
     }
     else
     {
-        Write-Output "$Name module is installed and imported."
+        #Write-Output "$Name module is installed and imported."
     }
 }
+
+
+function Bytes-HumanReadable
+{
+    param (
+        [Parameter(Mandatory=$true)] [double]$Bytes,
+        [int]$DecimalDigits = 1,
+        [bool]$DisplayPlus = $false
+    )
+
+    $units = @("B", "KB", "MB", "GB", "TB", "PB")
+    $unitIndex = 0
+
+    if ($Bytes -eq 0)
+    {
+        return "0"
+    }
+
+    while ([Math]::Abs($Bytes) -ge 1024 -and $unitIndex -lt $units.Length - 1)
+    {
+        $Bytes /= 1024
+        $unitIndex++
+    }
+
+    $formattedResult = "{0:N$($DecimalDigits)} {1}" -f $Bytes, $units[$unitIndex]
+
+    if ($DisplayPlus -and $Bytes -gt 0)
+    {
+        # add a "+" at start if requested
+        $formattedResult = "+$formattedResult"
+    }
+
+    return $formattedResult
+}
+
+
+function Resume-Processes
+{
+    # used to track how the RAM usage of all suspended processes changed
+    $totalRAMDelta = 0
+
+    foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name }) 
+    {
+        try 
+        {
+            if ($pidRAMUsages)
+            {
+                $prevRamUsage = $pidRAMUsages[$proc.Id]
+                $currRamUsage = $proc.WorkingSet64
+                # done before resuming process in case resuming causes immediate swapping from page file to RAM
+
+                $delta = $currRamUsage - $prevRamUsage
+                $totalRAMDelta += $delta
+
+                $currRamUsageHR = Bytes-HumanReadable -Bytes $currRamUsage
+                $deltaHR = Bytes-HumanReadable -Bytes $delta -DisplayPlus $true
+            }
+
+            [ProcessManager]::ResumeProcess($proc.Id)
+
+            if ($pidRAMUsages)
+            {
+                Write-Output "Resumed: $($proc.Name) ($($proc.Id)) - $($currRamUsageHR) RAM [change: $($deltaHR)]"
+            }
+            else
+            {
+                Write-Output "Resumed: $($proc.Name) ($($proc.Id))"
+            }
+
+            # FIXME: processes suspended from a previous iteration of the script 
+            # (e.g. interupted by Ctrl-C before the script does the resuming)
+            # don't seem to resume ok and idk why.  maybe cos a different process suspended them?
+
+        } 
+        catch 
+        {
+            Write-Error "Failed to resume: $($proc.Name) ($($proc.Id)). Error: $_"
+        }
+    }
+
+    $totalRAMDeltaHR = Bytes-HumanReadable -Bytes $totalRAMDelta -DisplayPlus $true
+    Write-Output "Total RAM usage change during suspension: $($totalRAMDeltaHR)"
+}
+
+
 
 
 
@@ -277,55 +320,47 @@ if ($args -contains "--resume-all")
 
 
 # should we run once or constantly?
+# e.g. use this if the script will be run whenever a new process is ran on the system
 $checkOnce = $false
 if ($args -contains "--check-once") 
 {
     $checkOnce = $true
-    Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Checking for game processes once"
 }
-else
-{
-    Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Listening for game processes..."
-}
-
 
 # Used to store info on suspended process for resumption later
 $suspendedProcesses = @()
 
 
-
+# Define the full path to the icon file
 # Get the path of the folder where the script is located
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
-
-# Define the full path to the icon file
 $iconPath = Join-Path -Path $scriptDirectory -ChildPath "pause.ico"
 
-
+# did we sit idle last time around the while() loop?
+$wasIdleLastLoop = $false
 
 try 
 {
     while ($true)
     {
+        if (-not ($wasIdleLastLoop))
+        {
+            if ($checkOnce)
+            {
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Checking for game processes..."
+            }
+            else
+            {
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Listening for game processes..."
+            }
+        }
+
+        $wasIdleLastLoop = $true
         $runningGameProcesses = Get-Process | Where-Object { $gameProcessNames -contains $_.Name }
 
         if ($runningGameProcesses)
         {
-            ## show a notification without using BurntToast module
-            #[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-            #$Template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
-            #$XML = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($Template)
-            #
-            # Set notification text
-            #$TextNodes = $XML.GetElementsByTagName("text")
-            #$TextNodes.Item(0).AppendChild($XML.CreateTextNode("Game Detected")) | Out-Null
-            #$TextNodes.Item(1).AppendChild($XML.CreateTextNode("The suspender script has detected a game!")) | Out-Null
-            #
-            # Create and display the notification
-            #$Toast = [Windows.UI.Notifications.ToastNotification]::new($XML)
-            #$Notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("PowerShell Script")
-            #$Notifier.Show($Toast)
-            #
-            # it's so yucky that i just decided to use BurntToast as above and below
+            $wasIdleLastLoop = $false
 
             foreach ($runningGameProcess in $runningGameProcesses) 
             {
@@ -334,20 +369,21 @@ try
             }
 
             # Minimise windows of all processes in the blacklist
-            foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name }) 
+            # FIXME: doesn't seem to work for certain apps (e.g. Microsoft Store apps)
+            foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name })
             {
                 try
                 {
-                    $minimisedWindows = [ProcessManager]::MinimizeProcessWindows($proc.Id);
+                    $numWindowsMinimised = [ProcessManager]::MinimizeProcessWindows($proc.Id);
 
-                    if ($minimisedWindows)
+                    if ($numWindowsMinimised)
                     {
-                        Write-Host "Minimised: $($proc.Name) ($($proc.Id)) [$($minimisedWindows) windows]";
+                        Write-Output "Minimised: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]";
                     }
                 }
-                catch 
+                catch
                 {
-                    Write-Host "!!!! Failed to minimise: $($proc.Name) ($($proc.Id)). Error: $_";
+                    Write-Output "!!!! Failed to minimise: $($proc.Name) ($($proc.Id)). Error: $_";
                 }
             }
 
@@ -359,11 +395,13 @@ try
             {
                 try
                 {
-                    $ramUsage = Get-WorkingSetMB $proc
+                    $ramUsage = $proc.WorkingSet64
                     $pidRAMUsages[$proc.Id] = $ramUsage
+                    #HR = human readable
+                    $ramUsageHR = Bytes-HumanReadable -Bytes $proc.WorkingSet64
 
                     [ProcessManager]::SuspendProcess($proc.Id)
-                    Write-Output "Suspended: $($proc.Name) ($($proc.Id)) - $($ramUsage)MB RAM"
+                    Write-Output "Suspended: $($proc.Name) ($($proc.Id)) - $($ramUsageHR) RAM"
 
                     # Store suspended process details..
                     $suspendedProcesses += [PSCustomObject]@{ Name = $proc.Name; Id = $proc.Id }
@@ -396,11 +434,7 @@ try
             # this is a bit hacky in case some didn't resume properly but if they didn't,
             # what are we going to do about it anyway?
 
-            if (!$checkOnce)
-            {
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Listening for game processes after 2s..."
-            }
-            else
+            if ($checkOnce)
             {
                 break
             }
@@ -413,13 +447,19 @@ try
                 break
             }
         }
-        Start-Sleep -Seconds 2
+
+        if (-not ($wasIdleLastLoop))
+        {
+            Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 2 seconds..."
+            Start-Sleep -Seconds 2
+        }
+
     }
 }
 catch 
 {
-    Write-Host "An error occurred: $_"
-    Write-Host "Press Enter to exit."
+    Write-Error "!!!! An error occurred: $_"
+    Write-Output "Press Enter to exit."
     Read-Host
 }
 finally
