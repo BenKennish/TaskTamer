@@ -4,4 +4,4 @@
 :: because, by default, powershell scripts cannot be executed directly
 
 :: run the powershell script (in a separate window) and pass all arguments
-start "" powershell -ExecutionPolicy Bypass -File "suspender.ps1" %*
+start "" powershell -ExecutionPolicy Bypass -File "AutoSuspender.ps1" %*

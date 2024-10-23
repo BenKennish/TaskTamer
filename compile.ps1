@@ -18,18 +18,19 @@ if (-not (Test-Path "AutoSuspender.exe"))
 
     # compile
     Write-Output "Compiling..."
-    Invoke-PS2EXE -InputFile "AutoSuspender.ps1" -OutputFile "AutoSuspender.exe" -IconFile "pause.ico"
+    Invoke-PS2EXE -InputFile "AutoSuspender.ps1" -OutputFile "AutoSuspender.exe" -IconFile "images\pause.ico"
+
 
     if (-not ($compilerAlreadyInstalled))
     {
         # remove compiler if we just installed it
         Write-Output "Removing PS2EXE..."
+        Start-Sleep -Milliseconds 1500
         Uninstall-Module -Name PS2EXE -Force
     }
 
 }
 else
 {
-
     Write-Output "AutoSuspender.exe already exists. Exiting."
 }

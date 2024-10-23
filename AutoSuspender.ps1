@@ -292,6 +292,7 @@ function Resume-Processes
 }
 
 
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force  #prevents issues when this script runs as compiled exe
 Install-and-Import-Module -Name "BurntToast"
 
 
@@ -360,7 +361,7 @@ try
             foreach ($runningGameProcess in $runningGameProcesses) 
             {
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningGameProcess.Name) ($($runningGameProcess.Id))"
-                New-BurntToastNotification -Text "$($runningGameProcess.Name) detected", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
+                New-BurntToastNotification -Text "$($runningGameProcess.Name) is running", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
             }
 
             # Minimise windows of all target processes
