@@ -1,37 +1,46 @@
-# List of names of processes (without ".exe") to suspend a.k.a. target processes
-$processesToSuspend = @(
+# AutoSuspender
+#
+# Automatically suspend chosen target processes (and minimise their windows) 
+# whenever chosen trigger processes (e.g. video games) are running, and 
+# automatically resume the target processes when the trigger process closes.
+
+
+# TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
+#       note: very likely to suspend things that will cause problems tho
+#
+# TODO: if user gives focus to any suspended process (before game has been closed), resume it temporarily.
+#       this gets quite complicated to do in a way that doesn't potentially increase load on the system
+#       as it can require repeatedly polling in a while() loop
+#       OR perhaps just detect when a game loses focus and then unsuspend everything and resuspend them when it gains focus again
+#       OR they could just manually ctrl-C the script and then run it again before restoring the game app
+#
+# TODO: allow setting CPU priority to Low for certain processes (and restore current priority when trigger process closes)
+#       rather than suspending them using $proc.PriorityClass property
+#
+# TODO: run user configurable list of commands when detecting a game?
+
+# List of names of processes (without ".exe") to suspend: target processes
+$targetProcessNames = @(
     "brave",
     "chrome",
     "Spotify",
     "WhatsApp",
     "Signal",
-    #"GoogleDriveFS", # seems to crash Explorer related stuff
+    "java", #for Minecraft - NOTE: will also trigger everything else Java!
+    "Minecraft",
+    #"GoogleDriveFS", # seems to crash Explorer related stuff, presumably when it accesses the virtual drive
     "notepad"   # for testing purposes, notepad is considered a process to suspend
 )
 
-# TODO: show a pause icon in notification area when suspending and a play icon when resuming
-# TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
-#       note: very likely to suspend things that will cause problems tho
-# TODO: if user gives focus to any suspended process (before game has been closed), resume it temporarily.
-#       this gets quite complicated to do in a way that doesn't potentially increase load on the system
-#       as it can require repeatedly polling in a while() loop
-#       OR perhaps just detect when a game loses focus and then unsuspend and resuspend when it gains focus again
 
-
-# List of names of processes (without ".exe") to check, a.k.a. trigger processes (e.g. video games)
-$gameProcessNames = @(
+# List of names of processes (without ".exe") to check: trigger processes (e.g. video games)
+$triggerProcessNames = @(
     "Overwatch",
     "FortniteLauncher",
     "RocketLeague",
     "gw2-64",
-    "CalculatorApp",  # for testing purposes
-    "Solitaire"  # for testing purposes
-)
-
-
-# TODO: run user configurable list of commands when detecting a game (unimplemented)
-$cmdsToRunOnGameLaunch = @(
-    "wsl --shutdown"
+    "CalculatorApp", # for testing purposes
+    "Solitaire"      # for testing purposes
 )
 
 # this will enable/disable the display of Write-Debug messages
@@ -39,9 +48,14 @@ $cmdsToRunOnGameLaunch = @(
 
 
 # map process PIDs to RAM (bytes) usages
-$pidRAMUsages = @{
-    #e.g 6231 = 38125123
-}
+# this is a hash table, not an array
+# used to remember the RAM usage of target processes 
+# just prior to suspension
+$pidRamUsages = @{}
+
+
+# Process, PID, RAM, deltaRAM, Notes
+$tableFormat = "{0,-11} {1,-6} {2,10} {3,11} {4,-10}"
 
 
 # Add necessary .NET assemblies for API calls
@@ -170,10 +184,13 @@ public class ProcessManager
 
         return numWindowsMinimised;
     }
+
 }
+
 "@
 
 
+# -----------------------------------------------------------------------------
 function Install-and-Import-Module
 {
     param(
@@ -186,7 +203,6 @@ function Install-and-Import-Module
         try
         {
             Install-Module -Name $Name -Scope CurrentUser -Force -ErrorAction Stop
-            #Write-Output "Module $Name installed successfully."
         }
         catch
         {
@@ -202,13 +218,10 @@ function Install-and-Import-Module
         Write-Error "!!! Failed to import $Name module."
         exit 1
     }
-    else
-    {
-        #Write-Output "$Name module is installed and imported."
-    }
 }
 
 
+# -----------------------------------------------------------------------------
 function Bytes-HumanReadable
 {
     param (
@@ -243,87 +256,152 @@ function Bytes-HumanReadable
 }
 
 
+
+# functionised as used in multiple locations
+# could we repurpose this as a function for both suspend and resume?
+# -----------------------------------------------------------------------------
 function Resume-Processes
 {
+
+    $lastProcessName = ""
+    $sameProcessCount = 0
+    $sameProcessRamTotal = 0
+
     # used to track how the RAM usage of all suspended processes changed
-    $totalRAMDelta = 0
+    $totalRamDelta = 0
+    $sameProcessRamDeltaTotal = 0
 
-    foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name }) 
+    # Write-Host used over Write-Output as this function can be called
+    # once the script is terminating and it then has no access to Write-Output pipeline
+    Write-Host "Resuming processes..."
+    Write-Host ($tableFormat -f "Name", "PID", "RAM", "Change", "")
+
+    # we don't look at suspendedProcesses array but just do another process scan
+    # this might result in trying to resume new processes that weren't suspended (doesnt matter)
+    foreach ($proc in Get-Process | Where-Object { $targetProcessNames -contains $_.Name })
     {
-        try 
+        # calculate RAM based calcs for current process
+        $prevRamUsage = $pidRamUsages[$proc.Id]  # the RAM usage of this PID just before it was suspended
+        $currRamUsage = $proc.WorkingSet64
+        # stored before resuming the process in case resuming causes immediate swapping from page file to RAM
+
+        $ramUsageDelta = $currRamUsage - $prevRamUsage
+        $totalRamDelta += $ramUsageDelta
+
+        $currRamUsageHR = Bytes-HumanReadable -Bytes $currRamUsage
+        $ramUsageDeltaHR = Bytes-HumanReadable -Bytes $ramUsageDelta -DisplayPlus $true
+
+
+        # display subtotal for a group of processes with the same name
+        if ($proc.name -ne $lastProcessName)
         {
-            if ($pidRAMUsages)
+            if ($sameProcessCount -gt 1)
             {
-                $prevRamUsage = $pidRAMUsages[$proc.Id]
-                $currRamUsage = $proc.WorkingSet64
-                # done before resuming process in case resuming causes immediate swapping from page file to RAM
+                $sameProcessRamTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamTotal
+                $sameProcessRamDeltaTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamDeltaTotal -DisplayPlus $true
 
-                $delta = $currRamUsage - $prevRamUsage
-                $totalRAMDelta += $delta
-
-                $currRamUsageHR = Bytes-HumanReadable -Bytes $currRamUsage
-                $deltaHR = Bytes-HumanReadable -Bytes $delta -DisplayPlus $true
+                # display a subtotal row for the previous processes if there was more than 1 with same name
+                Write-Host ($tableFormat -f "$lastProcessName++", "---", $sameProcessRamTotalHR, $sameProcessRamDeltaTotalHR, $dryRunText) -ForegroundColor Yellow
             }
 
-            [ProcessManager]::ResumeProcess($proc.Id)
-
-            if ($pidRAMUsages)
-            {
-                Write-Output "Resumed: $($proc.Name) ($($proc.Id)) - $($currRamUsageHR) RAM [$($deltaHR)]"
-            }
-            else
-            {
-                Write-Output "Resumed: $($proc.Name) ($($proc.Id))"
-            }
-
-            # FIXME: processes suspended from a previous iteration of the script 
-            # (e.g. interupted by Ctrl-C before the script does the resuming)
-            # don't seem to resume ok and idk why.  maybe cos a different process suspended them?
-
-        } 
-        catch 
-        {
-            Write-Error "Failed to resume: $($proc.Name) ($($proc.Id)). Error: $_"
+            $sameProcessName = $proc.Name
+            $sameProcessCount = 1
+            $sameProcessRamTotal = $proc.WorkingSet64
+            $sameProcessRamDeltaTotal = $ramUsageDelta
         }
+        else
+        {
+            # same process name as last time
+            $sameProcessCount++
+            $sameProcessRamTotal += $proc.WorkingSet64
+            $sameProcessRamDeltaTotal += $ramUsageDelta
+        }
+
+        Write-Host ($tableFormat -f $proc.Name, $proc.Id, $currRamUsageHR, $ramUsageDeltaHR, $dryRunText)
+
+        if (!$dryRun)
+        {
+            try
+            {
+                [ProcessManager]::ResumeProcess($proc.Id)
+            }
+            catch
+            {
+                # NB: Write-Error won't work in the script's finally block
+                Write-Host "Failed to resume: $($proc.Name) ($($proc.Id)). Error: $_"
+            }
+        }
+
+        $lastProcessName = $proc.name
     }
 
-    $totalRAMDeltaHR = Bytes-HumanReadable -Bytes $totalRAMDelta -DisplayPlus $true
-    Write-Output "Total RAM usage change during suspension: $($totalRAMDeltaHR)"
+    #TODO: we need to display another subtotal row if sameProcessCount > 1
+
+    Write-Host ""
+    if ($pidRamUsages)
+    {
+        $totalRamDeltaHR = Bytes-HumanReadable -Bytes $totalRamDelta -DisplayPlus $true
+        #Write-Host "Overall change in RAM usage of all these processes during suspension: $($totalRamDeltaHR)"
+        Write-Host ($tableFormat -f "TOTAL", "ALL", "", $totalRamDeltaHR, $dryRunText)
+    }
 }
 
 
-Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force  #prevents issues when this script runs as compiled exe
-Install-and-Import-Module -Name "BurntToast"
+# UTF-8 mode
+#$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 
+#prevent issues when this script runs as compiled exe:
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+Install-and-Import-Module -Name "BurntToast"
 
 # change window appearance
 $Host.UI.RawUI.BackgroundColor = 'DarkMagenta'
 $Host.UI.RawUI.ForegroundColor = 'White'
+
+#$Host.UI.RawUI.BackgroundColor = 'Black'
+#$Host.UI.RawUI.ForegroundColor = 'Green'
 Clear-Host  # Clear the console to apply the new colors
 
-Write-Output "/--------------------\"
-Write-Output "| AutoSuspender v0.5 |"
-Write-Output "\--------------------/"
+# when set to true, no minimise windows or suspend process operations will occur
+$dryRun = $false
+
+# text to indicate to user that script is in dry run mode
+$dryRunText = ""
+
+if ($args -contains "--dry-run")
+{
+    $dryRun = $true
+    $dryRunText = " <dry run>"
+}
+
+# I can't get unicode box drawing chars working properly  :(
+
+Write-Output "/======================\"
+Write-Output "| AutoSuspender v0.6.1 |$($dryRunText)"
+Write-Output "\======================/"
 Write-Output ""
 
 if ($args -contains "--resume-all")
 {
-    # Resume all processes first 
+    # Resume all target processes first
     # (used primarily for debugging when a previous script failed to resume processes)
+
+    Write-Output "Resuming all processes ('--resume-all')"
     Resume-Processes
 }
 
 
 # should we run once or constantly?
-# e.g. use this if the script will be run whenever a new process is ran on the system
+# e.g. use --check-once if the script will be run whenever a new process is ran on the system
+# (probably run it invisibly so a terminal windows doesnt keep appearing)
 $checkOnce = $false
-if ($args -contains "--check-once") 
+if ($args -contains "--check-once")
 {
     $checkOnce = $true
 }
 
-# Used to store info on suspended process for resumption later
-$suspendedProcesses = @()
+# Are there some processes that we suspended and have yet to resume?
+$suspendedProcesses = $false
 
 
 # Define the full path to the icon files using 
@@ -352,72 +430,128 @@ try
         }
 
         $wasIdleLastLoop = $true
-        $runningGameProcesses = Get-Process | Where-Object { $gameProcessNames -contains $_.Name }
+        $runningTriggerProcesses = Get-Process | Where-Object { $triggerProcessNames -contains $_.Name }
 
-        if ($runningGameProcesses)
+        if ($runningTriggerProcesses)
         {
             $wasIdleLastLoop = $false
 
-            foreach ($runningGameProcess in $runningGameProcesses) 
+            foreach ($runningTriggerProcess in $runningTriggerProcesses) 
             {
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningGameProcess.Name) ($($runningGameProcess.Id))"
-                New-BurntToastNotification -Text "$($runningGameProcess.Name) is running", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id))"
+                New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
             }
 
             # Minimise windows of all target processes
             # FIXME: doesn't seem to work for certain apps (e.g. Microsoft Store apps)
-            foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name })
+            foreach ($proc in Get-Process | Where-Object { $targetProcessNames -contains $_.Name })
             {
                 try
                 {
-                    $numWindowsMinimised = [ProcessManager]::MinimizeProcessWindows($proc.Id);
+                    $numWindowsMinimised = 0;
+                    if (!$dryRun)
+                    {
+                        $numWindowsMinimised = [ProcessManager]::MinimizeProcessWindows($proc.Id)
+                    }
 
                     if ($numWindowsMinimised)
                     {
-                        Write-Output "Minimised: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]";
+                        Write-Output "Minimised: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]$($dryRunText)"
                     }
                 }
                 catch
                 {
-                    Write-Output "!!!! Failed to minimise: $($proc.Name) ($($proc.Id)). Error: $_";
+                    Write-Error "!!!! Failed to minimise: $($proc.Name) ($($proc.Id)). Error: $_";
                 }
             }
 
-            # Optional: Wait a short time to ensure minimize commands are processed
-            Start-Sleep -Milliseconds 1500
+            # Wait a short time to ensure minimize commands are processed
+            Start-Sleep -Milliseconds 250
+
+            $lastProcessName = ""
+            $sameProcessCount = 0
+            $sameProcessRamTotal = 0
+
+            Write-Output "Suspending processes..."
+            Write-Host ($tableFormat -f "Name", "PID", "RAM", "", "") -ForegroundColor Yellow
 
             # Suspend all target processes
-            foreach ($proc in Get-Process | Where-Object { $processesToSuspend -contains $_.Name })
+            foreach ($proc in Get-Process | Where-Object { $targetProcessNames -contains $_.Name })
             {
+
+                # display subtotal for a group of processes
+                if ($proc.name -ne $lastProcessName)
+                {
+                    if ($sameProcessCount -gt 1)
+                    {
+                        $sameProcessRamTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamTotal
+
+                        # display a subtotal row for the previous processes if there was more than 1
+                        Write-Host ($tableFormat -f "$lastProcessName++", "---", $sameProcessRamTotalHR, "", $dryRunText) -ForegroundColor Yellow
+                    }
+
+                    $sameProcessName = $proc.Name
+                    $sameProcessCount = 1
+                    $sameProcessRamTotal = $proc.WorkingSet64
+                }
+                else
+                {
+                    # same process name as last time
+                    $sameProcessCount++
+                    $sameProcessRamTotal += $proc.WorkingSet64
+                }
+
+                #TODO: maybe investigate $proc.PagedMemorySize64
+                #                        $proc.PriorityBoostEnabled
+                #                        $proc.MainWindowTitle
+                #                        $proc.MainWindowHandle
+
+                $pidRamUsages[$proc.Id] = $proc.WorkingSet64
+                # "HR" - human readable
+                $ramUsageHR = Bytes-HumanReadable -Bytes $proc.WorkingSet64
+
+                Write-Output ($tableFormat -f $proc.Name, $proc.Id, $ramUsageHR, "", $dryRunText)
+
+                # suspend the process
                 try
                 {
-                    $ramUsage = $proc.WorkingSet64
-                    $pidRAMUsages[$proc.Id] = $ramUsage
-                    #HR = human readable
-                    $ramUsageHR = Bytes-HumanReadable -Bytes $proc.WorkingSet64
+                    if (!$dryRun)
+                    {
+                        [ProcessManager]::SuspendProcess($proc.Id)
+                    }
 
-                    [ProcessManager]::SuspendProcess($proc.Id)
-                    Write-Output "Suspended: $($proc.Name) ($($proc.Id)) - $($ramUsageHR) RAM"
-
-                    # Store suspended process details..
-                    $suspendedProcesses += [PSCustomObject]@{ Name = $proc.Name; Id = $proc.Id }
+                    $suspendedProcesses = $true
+                    #$suspendedProcesses += [PSCustomObject]@{ Name = $proc.Name; Id = $proc.Id }
                 }
                 catch
                 {
                     Write-Error "!!!! Failed to suspend: $($proc.Name) ($($proc.Id)). Error: $_"
                 }
+
+                $lastProcessName = $proc.name
+
             }
 
+            #TODO: we need to display another subtotal row if sameProcessCount > 1
 
-            # Wait for the game(s) to exit
-            foreach ($runningGameProcess in $runningGameProcesses)
+            # Wait for the trigger process(es) to exit
+            foreach ($runningTriggerProcess in $runningTriggerProcesses)
             {
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for trigger process $($runningGameProcess.Name) ($($runningGameProcess.Id)) to exit..."
-                $runningGameProcess.WaitForExit()
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Exited"
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for trigger process $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) to exit..."
+
+                # here's how we might run some code async
+                #$job = Start-ThreadJob -ScriptBlock {
+                #        $killer = New-Object -TypeName 'Assassin'
+                #        Start-Sleep 5
+                #        Write-Host 'raise'
+                #        $killer.Raise(0)
+                #}
+
+                $runningTriggerProcess.WaitForExit()
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) Exited"
             }
 
-            New-BurntToastNotification -Text "$($runningGameProcess.Name) exited", "AutoSuspender is resuming target processes." -AppLogo $playIconPath
+            New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "AutoSuspender is resuming target processes." -AppLogo $playIconPath
 
             # FIXME: if you open a game and then you open another game before closing the first, closing the first
             # will result in resuming the suspended processes and then, 2s later, suspending them all again
@@ -425,10 +559,7 @@ try
             # this isn't a priority to fix
 
             Resume-Processes
-
-            $suspendedProcesses = @()  # Reset the array to an empty state
-            # this is a bit hacky in case some didn't resume properly but if they didn't,
-            # what are we going to do about it anyway?
+            $suspendedProcesses = $false
 
             if ($checkOnce)
             {
@@ -446,32 +577,35 @@ try
 
         if (-not ($wasIdleLastLoop))
         {
-            Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 2 seconds..."
-            Start-Sleep -Seconds 2
+            Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds..."
         }
+
+        Start-Sleep -Seconds 3
 
     }
 }
 catch 
 {
     Write-Error "!!!! An error occurred: $_"
-    Write-Output "Press Enter to exit."
+    Write-Host "Press Enter to exit."
     Read-Host
 }
 finally
 {
-    Write-Output "[$(Get-Date -Format 'HH:mm')] Shutting down..."
+    # must use Write-Host here
+    # Write-Output and Write-Error are not available when application is 
+    # shutting down
 
-    # Ensure suspended processes are resumed if the script is terminated (e.g. Ctrl-C)
-    foreach ($suspendedProcess in $suspendedProcesses)
+    Write-Host "[$(Get-Date -Format 'HH:mm')] Shutting down..."
+
+    if ($suspendedProcesses)
     {
-        [ProcessManager]::ResumeProcess($suspendedProcess.Id)
-        Write-Output "Resumed: $($suspendedProcess.Name) ($($suspendedProcess.Id))"
+        Resume-Processes
     }
 
     # reset window appearance?
-    #$Host.UI.RawUI.BackgroundColor = 'DarkMagenta'
-    #$Host.UI.RawUI.ForegroundColor = 'White'
-    #Clear-Host  # Clear the console to apply the new colors
+    $Host.UI.RawUI.BackgroundColor = 'Black'
+    $Host.UI.RawUI.ForegroundColor = 'White'
+    Clear-Host  # Clear the console to apply the new colors
 
 }
