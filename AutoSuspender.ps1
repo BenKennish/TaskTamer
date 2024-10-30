@@ -42,6 +42,8 @@ $triggerProcessNames = @(
     "CalculatorApp", # for testing purposes
     "Solitaire"      # for testing purposes
 )
+# TODO make this a hashmap like "gw2-64" => "Guild Wars 2"
+# and use the value for display purposes
 
 # this will enable/disable the display of Write-Debug messages
 #$DebugPreference = 'Continue'   #SilentlyContinue is the default
@@ -257,8 +259,38 @@ function Bytes-HumanReadable
 
 
 
+# display a subtotal row for the previous processes if there was more than 1 with same name
+function Process-Subtotal
+{
+    param (
+        [int]$sameProcessCount,
+        [int64]$sameProcessRamTotal,
+        [int64]$sameProcessRamDeltaTotal,
+        [string]$lastProcessName
+    )
+
+    if ($sameProcessCount -gt 1)
+    {
+        $sameProcessRamTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamTotal    
+
+        if ($sameProcessRamDeltaTotal -ne 0)
+        {
+            $sameProcessRamDeltaTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamDeltaTotal -DisplayPlus $true
+        }
+        else
+        {
+            $sameProcessRamDeltaTotalHR = ""
+        }
+        Write-Host ($tableFormat -f "$lastProcessName +", "-----", $sameProcessRamTotalHR, $sameProcessRamDeltaTotalHR, $dryRunText) -ForegroundColor Yellow
+
+    }
+}
+
+
+
 # functionised as used in multiple locations
-# could we repurpose this as a function for both suspend and resume?
+# TODO: repurpose this as a function for both suspend and resume operations
+# as lots of code duplication
 # -----------------------------------------------------------------------------
 function Resume-Processes
 {
@@ -267,7 +299,8 @@ function Resume-Processes
     $sameProcessCount = 0
     $sameProcessRamTotal = 0
 
-    # used to track how the RAM usage of all suspended processes changed
+    # used to track how the RAM usage of all suspended processes changed 
+    # over the lifetime of the trigger process
     $totalRamDelta = 0
     $sameProcessRamDeltaTotal = 0
 
@@ -275,6 +308,7 @@ function Resume-Processes
     # once the script is terminating and it then has no access to Write-Output pipeline
     Write-Host "Resuming processes..."
     Write-Host ($tableFormat -f "Name", "PID", "RAM", "Change", "")
+
 
     # we don't look at suspendedProcesses array but just do another process scan
     # this might result in trying to resume new processes that weren't suspended (doesnt matter)
@@ -295,19 +329,13 @@ function Resume-Processes
         # display subtotal for a group of processes with the same name
         if ($proc.name -ne $lastProcessName)
         {
-            if ($sameProcessCount -gt 1)
-            {
-                $sameProcessRamTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamTotal
-                $sameProcessRamDeltaTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamDeltaTotal -DisplayPlus $true
-
-                # display a subtotal row for the previous processes if there was more than 1 with same name
-                Write-Host ($tableFormat -f "$lastProcessName++", "---", $sameProcessRamTotalHR, $sameProcessRamDeltaTotalHR, $dryRunText) -ForegroundColor Yellow
-            }
+            Process-Subtotal -sameProcessCount $sameProcessCount -sameProcessRamTotal $sameProcessRamTotal -sameProcessRamDeltaTotal $sameProcessRamDeltaTotal -lastProcessName $lastProcessName
 
             $sameProcessName = $proc.Name
             $sameProcessCount = 1
             $sameProcessRamTotal = $proc.WorkingSet64
             $sameProcessRamDeltaTotal = $ramUsageDelta
+
         }
         else
         {
@@ -335,7 +363,7 @@ function Resume-Processes
         $lastProcessName = $proc.name
     }
 
-    #TODO: we need to display another subtotal row if sameProcessCount > 1
+    Process-Subtotal -sameProcessCount $sameProcessCount -sameProcessRamTotal $sameProcessRamTotal -sameProcessRamDeltaTotal $sameProcessRamDeltaTotal -lastProcessName $lastProcessName
 
     Write-Host ""
     if ($pidRamUsages)
@@ -347,19 +375,39 @@ function Resume-Processes
 }
 
 
-# UTF-8 mode
-#$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 
-#prevent issues when this script runs as compiled exe:
+# -----------------------------------------------------------------------------
+function Clean-Up
+{
+    # must use Write-Host here
+    # Write-Output and Write-Error are not available when application is 
+    # shutting down
+
+    Write-Host "[$(Get-Date -Format 'HH:mm')] Shutting down..."
+
+    if ($suspendedProcesses)
+    {
+        Resume-Processes
+    }
+
+    # reset window appearance?
+    $Host.UI.RawUI.BackgroundColor = 'Black'
+    $Host.UI.RawUI.ForegroundColor = 'White'
+    Clear-Host  # Clear the console to apply the new colors
+
+    Write-Host "Goodbye"
+}
+
+
+
+#prevent issues when this script runs as compiled .exe:
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+
 Install-and-Import-Module -Name "BurntToast"
 
 # change window appearance
 $Host.UI.RawUI.BackgroundColor = 'DarkMagenta'
 $Host.UI.RawUI.ForegroundColor = 'White'
-
-#$Host.UI.RawUI.BackgroundColor = 'Black'
-#$Host.UI.RawUI.ForegroundColor = 'Green'
 Clear-Host  # Clear the console to apply the new colors
 
 # when set to true, no minimise windows or suspend process operations will occur
@@ -374,12 +422,33 @@ if ($args -contains "--dry-run")
     $dryRunText = " <dry run>"
 }
 
-# I can't get unicode box drawing chars working properly  :(
+
+# Define cleanup actions.  NB: does not work if terminal window is closed
+$cleanupAction = {
+    Write-Output "Cleaning up before exit..."
+    Clean-Up
+    # ensures the script does indeed stop
+    # optional, but if we are cleaning up, we probably want to insist on closure
+    Stop-Process -Id $PID
+}
+
+# Register the AppDomain's ProcessExit event for general script termination
+[System.AppDomain]::CurrentDomain.add_ProcessExit({
+    & $cleanupAction
+})
+
+# Register for Ctrl+C handling, see also 'ConsoleBreak'
+$null = Register-EngineEvent -SourceIdentifier ConsoleCancelEventHandler -Action {
+    Write-Host "Ctrl+C detected, initiating cleanup..."
+    & $cleanupAction
+}
+
 
 Write-Output "/======================\"
 Write-Output "| AutoSuspender v0.6.1 |$($dryRunText)"
 Write-Output "\======================/"
 Write-Output ""
+# TODO get unicode box drawing chars working properly
 
 if ($args -contains "--resume-all")
 {
@@ -388,6 +457,10 @@ if ($args -contains "--resume-all")
 
     Write-Output "Resuming all processes ('--resume-all')"
     Resume-Processes
+
+    # FIXME: this is necessary because if the script terminates when a trigger process is running
+    # for some reason, simply running the script again and then closing the trigger process
+    # doesn't mean that they are resumed and idk why
 }
 
 
@@ -413,7 +486,7 @@ $playIconPath = Join-Path -Path $scriptDirectory -ChildPath "/images/play.ico"
 # did we sit idle last time around the while() loop?
 $wasIdleLastLoop = $false
 
-try 
+try
 {
     while ($true)
     {
@@ -443,7 +516,7 @@ try
             }
 
             # Minimise windows of all target processes
-            # FIXME: doesn't seem to work for certain apps (e.g. Microsoft Store apps)
+            # FIXME: doesn't seem to work for certain apps (e.g. Microsoft Store apps like WhatsAp;)
             foreach ($proc in Get-Process | Where-Object { $targetProcessNames -contains $_.Name })
             {
                 try
@@ -468,6 +541,7 @@ try
             # Wait a short time to ensure minimize commands are processed
             Start-Sleep -Milliseconds 250
 
+            # variables used for keeping track when there are more than one target processes with a specific name
             $lastProcessName = ""
             $sameProcessCount = 0
             $sameProcessRamTotal = 0
@@ -482,13 +556,13 @@ try
                 # display subtotal for a group of processes
                 if ($proc.name -ne $lastProcessName)
                 {
-                    if ($sameProcessCount -gt 1)
-                    {
-                        $sameProcessRamTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamTotal
-
-                        # display a subtotal row for the previous processes if there was more than 1
-                        Write-Host ($tableFormat -f "$lastProcessName++", "---", $sameProcessRamTotalHR, "", $dryRunText) -ForegroundColor Yellow
-                    }
+                    #if ($sameProcessCount -gt 1)
+                    #{
+                    #   $sameProcessRamTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamTotal
+                    #   # display a subtotal row for the previous processes if there was more than 1
+                    #   Write-Host ($tableFormat -f "$lastProcessName++", "---", $sameProcessRamTotalHR, "", $dryRunText) -ForegroundColor Yellow
+                    #}
+                    Process-Subtotal -sameProcessCount $sameProcessCount -sameProcessRamTotal $sameProcessRamTotal -lastProcessName $lastProcessName
 
                     $sameProcessName = $proc.Name
                     $sameProcessCount = 1
@@ -532,7 +606,8 @@ try
 
             }
 
-            #TODO: we need to display another subtotal row if sameProcessCount > 1
+            #we might need to display another subtotal row if sameProcessCount > 1
+            Process-Subtotal -sameProcessCount $sameProcessCount -sameProcessRamTotal $sameProcessRamTotal -lastProcessName $lastProcessName
 
             # Wait for the trigger process(es) to exit
             foreach ($runningTriggerProcess in $runningTriggerProcesses)
@@ -592,20 +667,6 @@ catch
 }
 finally
 {
-    # must use Write-Host here
-    # Write-Output and Write-Error are not available when application is 
-    # shutting down
-
-    Write-Host "[$(Get-Date -Format 'HH:mm')] Shutting down..."
-
-    if ($suspendedProcesses)
-    {
-        Resume-Processes
-    }
-
-    # reset window appearance?
-    $Host.UI.RawUI.BackgroundColor = 'Black'
-    $Host.UI.RawUI.ForegroundColor = 'White'
-    Clear-Host  # Clear the console to apply the new colors
-
+    Clean-Up
+    Unregister-Event -SourceIdentifier ConsoleCancelEventHandler
 }
