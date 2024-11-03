@@ -1,3 +1,4 @@
 # files for git to ignore
 *.exe
 *.lnk
+*.zip

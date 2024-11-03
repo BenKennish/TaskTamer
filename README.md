@@ -14,11 +14,10 @@ usage (working set) of the target processes dropped during their suspension.
 
 ## Installation
 
-Extract the files into a new folder somewhere.  This could be anywhere, e.g. a 
-folder on your desktop, but I recommend creating it somewhere like:
+Download the release .zip file.  Extract this into a new folder somewhere.  
+This could be anywhere, e.g. a folder on your desktop, but I recommend:
 
 `%localappdata%\AutoSuspender`
-
 
 Double click `AutoSuspender.bat` to run the script 
 
@@ -26,14 +25,5 @@ If you want to create a .exe file from the script, double click `compile.bat`.
 
 ## Configuration
 
-Follow these steps to configure the list of process names that are defined as 
-trigger / target processes...
-
-Open the script (AutoSuspender.ps1) in a text editor, e.g. notepad.
-
-You can add names to $targetProcessNames for the target processes (the ones 
-that will be suspended).  This is the name of the .exe file (e.g. gw2-64.exe) 
-but without the ".exe" bit on the end (so "gw2-64" in this example).
-
-You can add names to $triggerProcessNames for the trigger process names (e.g. 
-games).
+Edit the config.yaml file to configure the script.  Keep the spacing and formatting as is
+otherwise the script won't be able to read it properly.
