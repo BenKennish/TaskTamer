@@ -5,6 +5,7 @@
 # whenever chosen trigger processes (e.g. video games) are running, and
 # automatically resume the target processes when the trigger process closes.
 
+# ----------- TODO list --------------
 # TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
 #       note: very likely to suspend things that will cause problems tho
 #
@@ -27,15 +28,30 @@
 # - Example for setting affinity
 #    $process = Get-Process -Name 'SomeProcess'
 #    $process.ProcessorAffinity = 0x0000000F # Adjust based on available cores
-# - Close down unneeded game launchers?
+# - Close down unneeded game launchers (not used to launch any current games?)
 
-# TODO: read the next two variable data from a separate JSON config file
+# TODO: read the next two variable data from a separate JSON/YAML config file
 
-# TODO: show total RAM usage of all target processes on suspend and resume  <-------------------
+# TODO: periodically print memory usage of the trigger process (every 60s?)
+
+# TODO: print other global memory usage stats (e.g. total VM, disk cache, etc)
+
+
+param (
+    [int]$PollInterval = 0  # how often (in seconds) to poll the trigger process for memory data, 0 means we'll use WaitForExit instead.
+)
+
+
+if ($PollInterval -lt 0)
+{
+    throw "PollInterval must be a positive integer number of seconds (or 0 to disable polling)"
+}
 
 Set-StrictMode -Version Latest
-#Set-PSDebug -Trace 2
 $ErrorActionPreference = "Stop"
+#Set-PSDebug -Trace 2
+# this will enable/disable the display of Write-Debug messages
+$DebugPreference = 'Continue'   #SilentlyContinue is the default
 
 # List of names of processes (without ".exe") to suspend: target processes
 $targetProcessNames = @(
@@ -51,11 +67,11 @@ $targetProcessNames = @(
     #"GoogleDriveFS", # seems to crash Explorer related stuff, presumably when it accesses the virtual drive
 )
 
-
 # List of names of processes (without ".exe") to check: trigger processes (e.g. video games)
 $triggerProcessNames = @(
     "Overwatch",
-    "FortniteLauncher",
+    #"FortniteLauncher",
+    "FortniteClient-Win64-Shipping",
     "RocketLeague",
     "gw2-64",
     "java",     #for Minecraft - FIXME: will also trigger everything else Java!
@@ -64,16 +80,11 @@ $triggerProcessNames = @(
 # TODO make this a hashmap like "gw2-64" => "Guild Wars 2"
 # and use the value for display purposes
 
-# this will enable/disable the display of Write-Debug messages
-#$DebugPreference = 'Continue'   #SilentlyContinue is the default
-
-
 # map process PIDs to RAM (bytes) usages
 # this is a hash table, not an array
-# used to remember the RAM usage of target processes 
+# used to remember the RAM usage of target processes
 # just prior to suspension
 $pidRamUsages = @{}
-
 
 # Process, PID, RAM, deltaRAM, Notes
 $tableFormat = "{0,-11} {1,-6} {2,10} {3,11} {4,-10}"
@@ -212,32 +223,30 @@ public class ProcessManager
 
 
 # -----------------------------------------------------------------------------
-function Install-and-Import-Module
+function Install-and-Import
 {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Name
+        [string]$Module
     )
 
-    if (-not (Get-Module -ListAvailable -Name $Name -ErrorAction SilentlyContinue))
+    if (-not (Get-Module -ListAvailable -Name $Module -ErrorAction SilentlyContinue))
     {
         try
         {
-            Install-Module -Name $Name -Scope CurrentUser -Force -ErrorAction Stop
+            Install-Module -Name $Module -Scope CurrentUser -Force -ErrorAction Stop
         }
         catch
         {
-            Write-Error "!!! Failed to install $Name module."
-            exit 1
+            throw "Failed to install $Module module"
         }
     }
 
-    Import-Module $Name
+    Import-Module $Module
 
-    if (-not (Get-Module -Name $Name))
+    if (-not (Get-Module -Name $Module))
     {
-        Write-Error "!!! Failed to import $Name module."
-        exit 1
+        throw "Failed to import $Module module"
     }
 }
 
@@ -282,33 +291,36 @@ function Bytes-HumanReadable
 function Process-Subtotal
 {
     param (
-        [int]$sameProcessCount,
-        [int64]$sameProcessRamTotal,
-        [int64]$sameProcessRamDeltaTotal,
-        [string]$lastProcessName
+        [Parameter(Mandatory = $true)] [int]$sameProcessCount,
+        [Parameter(Mandatory = $true)] [string]$lastProcessName,
+        [Parameter(Mandatory = $true)] [int64]$sameProcessRamTotal,
+        [int64]$sameProcessRamDeltaTotal
     )
 
     if ($sameProcessCount -gt 1)
     {
         # only show subtotal when there is 2+ processes
-
-        $sameProcessRamTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamTotal
-
-        if ($sameProcessRamDeltaTotal -ne 0)
+        if ($sameProcessRamDeltaTotal -ne $null)
         {
-            $sameProcessRamDeltaTotalHR = Bytes-HumanReadable -Bytes $sameProcessRamDeltaTotal -DisplayPlus
+            Write-Host ($tableFormat -f "$lastProcessName",
+                                    "+++++",
+                                    (Bytes-HumanReadable -Bytes $sameProcessRamTotal),
+                                    (Bytes-HumanReadable -Bytes $sameProcessRamDeltaTotal),
+                                    $dryRunText) -ForegroundColor Yellow
         }
         else
         {
-            $sameProcessRamDeltaTotalHR = ""
+            Write-Host ($tableFormat -f "$lastProcessName",
+                        "+++++",
+                        (Bytes-HumanReadable -Bytes $sameProcessRamTotal),
+                        "",
+                        $dryRunText) -ForegroundColor Yellow
         }
-        Write-Host ($tableFormat -f "$lastProcessName", "+++++", $sameProcessRamTotalHR, $sameProcessRamDeltaTotalHR, $dryRunText) -ForegroundColor Yellow
-
     }
 }
 
 
-# suspend/resume target processes
+# Suspend / resume target processes
 # -----------------------------------------------------------------------------
 function Target-Processes
 {
@@ -330,21 +342,32 @@ function Target-Processes
 
     # used to track how the RAM usage of all suspended processes changed
     # over the lifetime of the trigger process (only used for -Resume operation)
-    $totalRamDelta = 0
-    $sameProcessRamDeltaTotal = 0
+    if ($Resume -and -not $NoDeltas)
+    {
+        $totalRamDelta = 0
+        $sameProcessRamDeltaTotal = 0
+    }
+    else 
+    {
+        $sameProcessRamDeltaTotal = $null
+    }
 
     # we use Write-Host over Write-Output as this function can be called
     # once the script is terminating and it then has no access to Write-Output pipeline
 
-    if ($Resume)
-    {
-        Write-Host ($tableFormat -f "NAME", "PID", "RAM", "CHANGE", "") -ForegroundColor Yellow
-    }
-    else 
+    if ($Suspend)
     {
         # create a lock file to indicate a script terminated before it could resume processes
         $PID | Out-File -FilePath $lockFilePath -Force
+    }
+
+    if ($Suspend -or $NoDeltas)
+    {
         Write-Host ($tableFormat -f "NAME", "PID", "RAM", "", "") -ForegroundColor Yellow
+    }
+    else
+    {
+        Write-Host ($tableFormat -f "NAME", "PID", "RAM", "CHANGE", "") -ForegroundColor Yellow
     }
 
 
@@ -358,87 +381,78 @@ function Target-Processes
         #                        $proc.PriorityBoostEnabled
         #                        $proc.MainWindowTitle
         #                        $proc.MainWindowHandle
-        if ($Resume)
+        # see also: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process?view=net-8.0
+
+        $proc.Refresh()  # refresh the memory stats - is this causing a problem?
+
+        #$currRamUsage = $proc.WorkingSet64
+        $totalRamUsage += $proc.WorkingSet64
+
+        if ($Suspend)
         {
-            # calculate RAM based calcs for current process
-            $prevRamUsage = $pidRamUsages[$proc.Id]  # the RAM usage of this PID just before it was suspended
-            $currRamUsage = $proc.WorkingSet64
-            # stored before resuming the process in case resuming causes immediate swapping from page file to RAM
-
-            $totalRamUsage += $currRamUsage
-
-            $ramUsageDelta = $currRamUsage - $prevRamUsage
+            $pidRamUsages[$proc.Id] = $proc.WorkingSet64  # store current RAM usage
+        }
+        elseif (-not $NoDeltas)
+        {
+            # if we are doing a -Resume and calculating deltas
+            $ramUsageDelta = $proc.WorkingSet64- $pidRamUsages[$proc.Id]
             $totalRamDelta += $ramUsageDelta
-
-            #$currRamUsageHR = Bytes-HumanReadable -Bytes $currRamUsage
-            #$ramUsageDeltaHR = Bytes-HumanReadable -Bytes $ramUsageDelta -DisplayPlus
-        }
-        else
-        {
-            $pidRamUsages[$proc.Id] = $proc.WorkingSet64
-            $currRamUsage = $proc.WorkingSet64
-            $totalRamUsage += $currRamUsage
-            #$currRamUsageHR = Bytes-HumanReadable -Bytes $proc.WorkingSet64
         }
 
-        # display subtotal for a group of processes with the same name
+
         if ($proc.name -ne $lastProcessName)
         {
-            Process-Subtotal `
-                -sameProcessCount $sameProcessCount `
-                -sameProcessRamTotal $sameProcessRamTotal `
-                -sameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
-                -lastProcessName $lastProcessName
+            # if this process has a different name to the last one
 
-            $sameProcessName = $proc.Name
+            # display subtotal for the previous group of processes with the same name
+            if ($lastProcessName -ne "")
+            {
+                Process-Subtotal `
+                    -sameProcessCount $sameProcessCount `
+                    -lastProcessName $lastProcessName `
+                    -sameProcessRamTotal $sameProcessRamTotal `
+                    -sameProcessRamDeltaTotal $sameProcessRamDeltaTotal  # this will be null if untracked
+            }
+
+            $lastProcessName = $proc.Name
             $sameProcessCount = 1
             $sameProcessRamTotal = $proc.WorkingSet64
 
-            if ($Resume)
+            if ($Resume -and -not $NoDeltas)
             {
                 $sameProcessRamDeltaTotal = $ramUsageDelta
             }
         }
         else
         {
-            # same process name as last time
+            # same process name as last time. continuing adding the subtotals
             $sameProcessCount++
             $sameProcessRamTotal += $proc.WorkingSet64
 
-            if ($Resume)
+            if ($Resume -and -not $NoDeltas)
             {
                 $sameProcessRamDeltaTotal += $ramUsageDelta
             }
         }
 
 
-        if ($Suspend)
+        if ($Resume -and -not $NoDeltas)
         {
-            Write-Host ($tableFormat -f 
+            Write-Host ($tableFormat -f
                             $proc.Name,
                             $proc.Id,
-                            (Bytes-HumanReadable -Bytes $currRamUsage),
-                            "",
-                            "$($dryRunText) $($proc.MainWindowTitle)"
-                        )
-        }
-        elseif ($NoDeltas)
-        {
-            Write-Host ($tableFormat -f 
-                            $proc.Name,
-                            $proc.Id,
-                            (Bytes-HumanReadable -Bytes $currRamUsage),
-                            "",
+                            (Bytes-HumanReadable -Bytes $proc.WorkingSet64),
+                            (Bytes-HumanReadable -Bytes $ramUsageDelta -DisplayPlus),
                             "$($dryRunText) $($proc.MainWindowTitle)"
                         )
         }
         else
-        { 
-            Write-Host ($tableFormat -f 
+        {
+            Write-Host ($tableFormat -f
                             $proc.Name,
                             $proc.Id,
-                            (Bytes-HumanReadable -Bytes $currRamUsage),
-                            (Bytes-HumanReadable -Bytes $ramUsageDelta -DisplayPlus),
+                            (Bytes-HumanReadable -Bytes $proc.WorkingSet64),
+                            "",
                             "$($dryRunText) $($proc.MainWindowTitle)"
                         )
         }
@@ -451,7 +465,7 @@ function Target-Processes
                 {
                     [ProcessManager]::SuspendProcess($proc.Id)
                 }
-                else 
+                elseif ($Resume)
                 {
                     [ProcessManager]::ResumeProcess($proc.Id)
                 }
@@ -475,31 +489,29 @@ function Target-Processes
 
     Process-Subtotal `
         -sameProcessCount $sameProcessCount `
+        -lastProcessName $lastProcessName `
         -sameProcessRamTotal $sameProcessRamTotal `
-        -sameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
-        -lastProcessName $lastProcessName
+        -sameProcessRamDeltaTotal $sameProcessRamDeltaTotal  # this will be null if untracked
 
-    #Write-Host ""
-
-    if ($Suspend)
+    if ($Resume -and -not $NoDeltas)
     {
-        Write-Host ($tableFormat -f 
-                    "<TOTAL>",
-                    "+++++",(Bytes-HumanReadable -Bytes $totalRamUsage),
-                    "-",
-                    $dryRunText) -ForegroundColor Yellow
-    }
-    elseif ($Resume -and $pidRamUsages)
-    {
-        #$totalRamDeltaHR = Bytes-HumanReadable -Bytes $totalRamDelta -DisplayPlus
-        #Write-Host "Overall change in RAM usage of all these processes during suspension: $($totalRamDeltaHR)"
-        Write-Host ($tableFormat -f 
+        Write-Host ($tableFormat -f
                     "<TOTAL>",
                     "+++++",
                     (Bytes-HumanReadable -Bytes $totalRamUsage),
                     (Bytes-HumanReadable -Bytes $totalRamDelta -DisplayPlus),
                     $dryRunText) -ForegroundColor Yellow
     }
+    else
+    {
+        Write-Host ($tableFormat -f
+            "<TOTAL>",
+            "+++++",
+            (Bytes-HumanReadable -Bytes $totalRamUsage),
+            "-",
+            $dryRunText) -ForegroundColor Yellow
+    }
+
 }
 
 
@@ -508,7 +520,7 @@ function Target-Processes
 function Clean-Up
 {
     # must use Write-Host here
-    # Write-Output and Write-Error are not available when application is 
+    # Write-Output and Write-Error are not available when application is
     # shutting down
 
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Shutting down..."
@@ -517,7 +529,18 @@ function Clean-Up
     {
         Target-Processes -Resume
     }
-    Remove-Item -Path $lockFilePath -Force
+
+    if (Test-Path -Path $lockFilePath)
+    {
+        try
+        {
+            Remove-Item -Path $lockFilePath -Force -ErrorAction Stop
+        }
+        catch
+        {
+            Write-Host "Error deleting ${lockFilePath}: $_"
+        }
+    }
 
     # reset window appearance?
     $Host.UI.RawUI.BackgroundColor = 'Black'
@@ -525,16 +548,14 @@ function Clean-Up
     Clear-Host  # Clear the console to apply the new colors
 
     Write-Host "[Goodbye] o/"
-
 }
-
 
 
 #prevent issues when this script runs as compiled .exe:
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 
-Install-and-Import-Module -Name "BurntToast"
-
+Install-and-Import -Module "BurntToast"
+Install-and-Import -Module "powershell-yaml"
 
 # Define cleanup actions.  NB: does not work if terminal window is closed
 $cleanupAction = {
@@ -543,17 +564,18 @@ $cleanupAction = {
     # ensures the script does indeed stop
     # optional, but if we are cleaning up, we probably want to insist on closure
     Stop-Process -Id $PID
+    Start-Sleep -Seconds 2
 }
 
 # Register the AppDomain's ProcessExit event for general script termination
 [System.AppDomain]::CurrentDomain.add_ProcessExit({
-    Write-Host "ProcessExit()"
+    Write-Host "ProcessExit() triggered"
     & $cleanupAction
 })
 
 # Register for Ctrl+C handling, see also 'ConsoleBreak'
 $null = Register-EngineEvent -SourceIdentifier ConsoleCancelEventHandler -Action {
-    Write-Host "Ctrl+C detected, initiating cleanup..."
+    Write-Host "Ctrl+C detected"
     & $cleanupAction
 }
 
@@ -569,33 +591,25 @@ if ($args -contains "--dry-run")
 }
 
 
-try
+# Define the full path to the icon files using
+# the path of the folder where the script is located
+if ($MyInvocation.MyCommand.Path)
 {
-    # Define the full path to the icon files using
-    # the path of the folder where the script is located
-    if ($MyInvocation.MyCommand.Path)
-    {
-        # For uncompiled PowerShell scripts
-        $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-    }
-    else
-    {
-        # For compiled executables
-        #$scriptPath = [System.IO.Path]::GetDirectoryName([System.Reflection.Assembly]::GetExecutingAssembly().Location)
-        $scriptPath = [System.IO.Path]::GetDirectoryName([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
-    }
-
-    $configPath    = Join-Path -Path $scriptPath -ChildPath "/config.json"
-    $pauseIconPath = Join-Path -Path $scriptPath -ChildPath "/images/pause.ico"
-    $playIconPath  = Join-Path -Path $scriptPath -ChildPath "/images/play.ico"
-    $lockFilePath  = Join-Path -Path $scriptPath -ChildPath "/lock.pid"
+    # For uncompiled PowerShell scripts
+    $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 }
-catch
+else
 {
-    Write-Error "An error occured: $_"
-    Write-Error $Error[0]
+    # For compiled executables
+    #$scriptPath = [System.IO.Path]::GetDirectoryName([System.Reflection.Assembly]::GetExecutingAssembly().Location)
+    $scriptPath = [System.IO.Path]::GetDirectoryName([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 }
 
+$configPath    = Join-Path -Path $scriptPath -ChildPath "/config.json"
+$pauseIconPath = Join-Path -Path $scriptPath -ChildPath "/images/pause.ico"
+$playIconPath  = Join-Path -Path $scriptPath -ChildPath "/images/play.ico"
+$lockFilePath  = Join-Path -Path $scriptPath -ChildPath "/lock.pid"
+$yamlFilePath  = Join-Path -Path $scriptPath -ChildPath "/config.yaml"
 
 # change window appearance
 $Host.UI.RawUI.BackgroundColor = 'DarkMagenta'
@@ -603,9 +617,10 @@ $Host.UI.RawUI.ForegroundColor = 'White'
 Clear-Host  # Clear the console to apply the new colors
 
 Write-Output "/======================\"
-Write-Output "| AutoSuspender v0.6.1 |$($dryRunText)"
+Write-Output "| AutoSuspender v0.7.0 |$($dryRunText)"
 Write-Output "\======================/"
-Write-Output "scriptPath: $scriptPath"
+Write-Debug "scriptPath: $scriptPath"
+Write-Debug "PollInterval: $PollInterval"
 Write-Output ""
 # TODO get unicode box drawing chars working properly
 
@@ -614,30 +629,29 @@ Write-Output ""
 #$config = Get-Content -Path $configPath | ConvertFrom-Json
 #Write-Output $config.TriggerProcesses
 
+# YAML file read
+#$config = Get-Content -Path $yamlFilePath -Raw | ConvertFrom-Yaml
+#$config | Out-Default
+##$config | Format-List -Property * -Force -Expand Both | Out-String -Width 1000
+#Start-Sleep -Seconds 2
 
-try
+
+if ($args -contains "--resume-all")
 {
-    if ($args -contains "--resume-all")
-    {
-        Write-Output "Resuming all processes ('--resume-all')..."
-        Target-Processes -Resume
-    }
-    elseif (Test-Path -Path $lockFilePath)
-    {
-        $pidInLockFile = Get-Content -Path $lockFilePath
-        Write-Debug "Lock file exists and contains '$($pidInLockFile)'"
-
-        if (-not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue))
-        {
-            Write-Output "Lock file exists and is stale.  Resuming all processes..."
-            Target-Processes -Resume
-            Remove-Item -Path $lockFilePath -Force
-        }
-    }
+    Write-Output "Resuming all processes ('--resume-all')..."
+    Target-Processes -Resume -NoDeltas
 }
-catch
+elseif (Test-Path -Path $lockFilePath)
 {
-    Write-Error "An error occured: $_"
+    $pidInLockFile = Get-Content -Path $lockFilePath
+    Write-Debug "Lock file exists and contains '$($pidInLockFile)'"
+
+    if (-not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue))
+    {
+        Write-Output "Lock file exists and is stale.  Resuming all processes..."
+        Target-Processes -Resume -NoDeltas
+        Remove-Item -Path $lockFilePath -Force
+    }
 }
 
 
@@ -676,11 +690,18 @@ try
         $wasIdleLastLoop = $true
         $runningTriggerProcesses = Get-Process | Where-Object { $triggerProcessNames -contains $_.Name }
 
+        $scriptProcess = Get-Process -Id $PID
+        $scriptProcessPreviousPriority = $scriptProcess.PriorityClass
+
         if ($runningTriggerProcesses)
         {
+            Write-Host "Setting AutoSuspender to a lower priority"
+            $scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+            #$scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Idle
+
             $wasIdleLastLoop = $false
 
-            foreach ($runningTriggerProcess in $runningTriggerProcesses) 
+            foreach ($runningTriggerProcess in $runningTriggerProcesses)
             {
                 $priorityBoost = $runningTriggerProcess.PriorityBoostEnabled
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) {PriorityBoostEnabled: $($priorityBoost)}"
@@ -715,12 +736,16 @@ try
 
             Target-Processes -Suspend
 
+            # "peak peak" is not a typo ;)
+            $peakPeakWorkingSet = 0
+            $peakPeakPagesMemorySize = 0
+
             # Wait for the trigger process(es) to exit
             foreach ($runningTriggerProcess in $runningTriggerProcesses)
             {
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for trigger process $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) to exit..."
 
-                # here's how we might run some code async
+                # this is how we might run some code async
                 #$job = Start-ThreadJob -ScriptBlock {
                 #        $killer = New-Object -TypeName 'Assassin'
                 #        Start-Sleep 5
@@ -728,20 +753,51 @@ try
                 #        $killer.Raise(0)
                 #}
 
-                $runningTriggerProcess.WaitForExit()
+                $peakWorkingSet = 0
+                $peakPagedMemorySize = 0
+
+                if ($PollInterval -gt 0)
+                {
+                    while (!$runningTriggerProcess.HasExited)
+                    {
+                        $runningTriggerProcess.Refresh()
+                        $peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
+                        $peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
+
+                        Write-Debug "Current peak working set: $(Bytes-HumanReadable -Bytes $runningTriggerProcess.PeakWorkingSet64)"
+                        Write-Debug "Current paged memory: $(Bytes-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
+                        Start-Sleep -Seconds $PollInterval
+                    }
+                }
+                else 
+                {
+                    $runningTriggerProcess.WaitForExit()   # blocking
+                    $peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
+                    $peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
+                }
+
+                New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "AutoSuspender is resuming target processes." -AppLogo $playIconPath
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) Exited"
+
+                Write-Host "Peak working set: $(Bytes-HumanReadable -Bytes $peakWorkingSet)"
+                Write-Host "Peak paged memory: $(Bytes-HumanReadable -Bytes $peakPagedMemorySize)"
+
+                #$counterPath = "\Process($($runningTriggerProcess.Name))\Working Set - Peak"
+                #$peakWSMemory = Get-Counter -Counter $counterPath -SampleInterval 1 -MaxSamples 1
+                #Write-Host "Windows Performance Counters API peak WS: $(Bytes-HumanReadable -Bytes $peakWSMemory)"
             }
 
-            New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "AutoSuspender is resuming target processes." -AppLogo $playIconPath
+            Write-Host "Restoring AutoSuspender priority to previous value"
+            $scriptProcess.PriorityClass = $scriptProcessPreviousPriority
 
             # FIXME: if you open a game and then you open another game before closing the first, closing the first
             # will result in resuming the suspended processes and then, 2s later, suspending them all again
-            # which isn't very efficient.  However most people don't run multiple games at once so 
+            # which isn't very efficient.  However most people don't run multiple games at once so
             # this isn't a priority to fix
 
             Target-Processes -Resume
             $suspendedProcesses = $false
-            Remove-Item -Path $lockFilePath -Force
+            Remove-Item -Path $lockFilePath -Force -ErrorAction SilentlyContinue
 
             if ($checkOnce)
             {
@@ -765,15 +821,17 @@ try
         Start-Sleep -Seconds 3
     }
 }
-catch 
+catch
 {
-    Write-Error "!!!! An error occurred: $_"
+    #Write-Error "ERROR: $_"
+    Write-Error "ERROR: $($_.Exception.Message) (Line: $($_.InvocationInfo.ScriptLineNumber))"
     Write-Host "Press Enter to exit."
     Read-Host
 }
 finally
 {
-    Write-Host "finally..."
+    Write-Host "Finally..."
+    Start-Sleep -Seconds 1
     Clean-Up
     Unregister-Event -SourceIdentifier ConsoleCancelEventHandler
 }
