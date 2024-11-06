@@ -1,0 +1,33 @@
+# @=======================
+# AutoSuspender config file template (YAML format)
+# ***DO NOT MODIFY***: The actual config file used by the script is config.yaml
+# Please edit config.yaml instead 
+# (it's autocreated from this template on running AutoSuspender)
+# =======================@
+# any text after a '#'' sign is ignored by AutoSuspender
+
+# list of process names (filename without ".exe") to act as triggers (e.g. video games)
+triggerProcessNames:  
+  - FortniteClient-Win64-Shipping
+  - RocketLeague
+  - Overwatch
+  - GW2-64
+  - Quake_x64_egs
+  - The Jackbox Megapicker
+
+# list of process names (filename without ".exe") to suspend whenever trigger processes are running
+targetProcessNames:
+  - chrome
+  - brave
+  - firefox
+  - msedge
+  - Spotify
+  - WhatsApp
+  - Signal
+# these are game launchers (any launcher contained in $launchers in the script that's used to launch the trigger process will not be suspended)
+  - Steam
+  - EpicGamesLauncher
+  - Battle.net
+
+# do we display Windows Action Center notifications?  true/false
+showNotifications: true

@@ -44,13 +44,14 @@ $Version = '0.8.5'
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-#$DebugPreference = 'Continue'   # this will enable/disable the display of Write-Debug messages, "SilentlyContinue" is the default
+$DebugPreference = 'Continue'   # this will enable/disable the display of Write-Debug messages, "SilentlyContinue" is the default
 #Set-PSDebug -Trace 2
 
 
-# Create a hashtable of known launchers
-# with process name as key and descriptive name as value
-# TODO: put this in a config file?
+# Hashtable of known launchers
+# key: process name, value: descriptive name
+# TODO: maybe this could go in the config file?
+# TODO: perhaps we can have some optimisation code specific to the different launchers
 $launchers = @{
     'steam'             = 'Steam'
     'epicgameslauncher' = 'Epic Games Launcher'
@@ -364,19 +365,19 @@ function Set-TargetProcessesState
                 $proc.Id,
                 (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
                 "",
-                "IGNORING LAUCHER"
+                "<Ignoring Launcher>"
             ) -ForegroundColor Gray
             continue
         }
 
         $proc.Refresh()  # refresh the memory stats for the process
 
+        # ignore processes that aren't running anymore
         if ($proc.HasExited)
         {
-            Write-Debug "$($proc.Id) has already exited"
+            Write-Debug "PID $($proc.Id) has already exited. Ignoring."
             continue
         }
-
 
         $totalRamUsage += $proc.WorkingSet64
 
@@ -815,7 +816,7 @@ try
                 $launcher = Find-Launcher -Process $runningTriggerProcess
                 if ($launcher)
                 {
-                    Write-Output "**** Detected running using launcher $launcher ($($launchers[$launcher]))"
+                    Write-Output "**** Detected running using launcher '$launcher' ($($launchers[$launcher]))"
                     #TODO: insert launcher specific configuration/optimisation here
                 }
             }

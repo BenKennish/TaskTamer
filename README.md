@@ -17,9 +17,9 @@ usage (working set) of the target processes dropped during their suspension.
 Download the release .zip file.  Extract this into a new folder somewhere.  
 This could be anywhere, e.g. a folder on your desktop, but I recommend:
 
-`%localappdata%\AutoSuspender`
+`%localappdata%\AutoSuspender` (e.g. C:\Users\Ben\AppData\Local\AutoSuspender)
 
-Double click `AutoSuspender.bat` to run the script 
+Run `AutoSuspender.bat` to start the script.
 
 If you want to create a .exe file from the script, double click `compile.bat`.
 
