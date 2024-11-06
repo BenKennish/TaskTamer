@@ -2,3 +2,5 @@
 *.exe
 *.lnk
 *.zip
+config.yaml
+create-release.ps1
