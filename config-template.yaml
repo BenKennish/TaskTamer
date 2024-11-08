@@ -6,16 +6,17 @@
 # =======================@
 # any text after a '#'' sign is ignored by AutoSuspender
 
-# list of process names (filename without ".exe") to act as triggers (e.g. video games)
+# list of process names (filename without ".exe")
+# to act as triggers (e.g. video games)
 triggerProcessNames:  
   - FortniteClient-Win64-Shipping
   - RocketLeague
   - Overwatch
   - GW2-64
-  - Quake_x64_egs
-  - The Jackbox Megapicker
+  - Among Us
 
-# list of process names (filename without ".exe") to suspend whenever trigger processes are running
+# list of process names (filename without ".exe") to minimise and suspend
+# whenever trigger processes are running
 targetProcessNames:
   - chrome
   - brave
@@ -24,7 +25,9 @@ targetProcessNames:
   - Spotify
   - WhatsApp
   - Signal
-# these are game launchers (any launcher contained in $launchers in the script that's used to launch the trigger process will not be suspended)
+# the next 3 are game launchers
+# AutoSuspender will not suspended launchers that were used to launch
+# the trigger process
   - Steam
   - EpicGamesLauncher
   - Battle.net
