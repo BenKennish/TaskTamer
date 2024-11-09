@@ -33,10 +33,13 @@
 # TODO: print other global memory usage stats (e.g. total VM, disk cache, etc)
 
 # Deal with given command line arguments
+# TODO: exit on getting unrecognised command line arguments
 param (
+    [switch]$Help,
     [switch]$DryRun,
     [switch]$ResumeAll,
     [switch]$CheckOnce,
+    [switch]$Debug,
     [int]$TriggerProcessPollInterval = 0
 )
 
@@ -44,8 +47,15 @@ $Version = '0.8.5'
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$DebugPreference = 'Continue'   # this will enable/disable the display of Write-Debug messages, "SilentlyContinue" is the default
-#Set-PSDebug -Trace 2
+
+if ($Debug)
+{
+    $DebugPreference = 'Continue'    # this will enable/disable the display of Write-Debug messages, "SilentlyContinue" is the default
+    $ErrorActionPreference = "Stop"  # should force instant error messages
+    $PSDefaultParameterValues['*:ErrorAction'] = 'Stop'
+    $PSDefaultParameterValues['*:Verbose'] = $true
+    Set-PSDebug -Trace 2
+}
 
 
 # Hashtable of known launchers
@@ -226,7 +236,7 @@ function Enable-Module
 function ConvertTo-HumanReadable
 {
     param (
-        [Parameter(Mandatory=$true)] [double]$Bytes,
+        [Parameter(Mandatory=$true)] [int64]$Bytes,
         [int]$DecimalDigits = 1,
         [switch]$DisplayPlus
     )
@@ -290,6 +300,40 @@ function Write-Subtotal
     }
 }
 
+# return the colour to display a number of bytes according to certain rules
+function Get-BytesColour
+{
+    param (
+        [Parameter(Mandatory = $true)] [int64]$Bytes,
+        [switch]$NegativeIsPositive,  # if set, the more negative a number is, the better it is.
+        [string]$BadColour = "Red"   # what colour to use if the number is bad
+    )
+
+    if ($NegativeIsPositive -and $Bytes -gt 0)
+    {
+        return $BadColour
+    }
+    if (-not $NegativeIsPositive -and $Bytes -lt 0)
+    {
+        return $BadColour
+    }
+
+    # 1st element : what colour to use for Bytes
+    # 2nd element : what colour to use for KBs
+    # etc  
+    #              B        KB      MB       GB        TB         PB
+    $colours = @("Gray", "White", "Cyan", "Green", "Magenta", "Magenta")
+    $unitIndex = 0
+
+    while ([Math]::Abs($Bytes) -ge 1024 -and $unitIndex -lt $colours.Length - 1)
+    {
+        $Bytes /= 1024
+        $unitIndex++
+    }
+    return $colours[$unitIndex]
+
+}
+
 
 # Suspend / resume target processes
 # -----------------------------------------------------------------------------
@@ -299,13 +343,13 @@ function Set-TargetProcessesState
     param (
         [Parameter(ParameterSetName = 'Suspend', Mandatory=$true)]
         [switch]$Suspend,
-        [Parameter(ParameterSetName = 'Suspend')]
-        [string]$Launcher = "",
 
         [Parameter(ParameterSetName = 'Resume', Mandatory=$true)]
         [switch]$Resume,
         [Parameter(ParameterSetName = 'Resume')]
-        [switch]$NoDeltas
+        [switch]$NoDeltas,
+
+        [string]$Launcher = ""
     )
 
     $lastProcessName = ""
@@ -347,7 +391,7 @@ function Set-TargetProcessesState
     # NB: for a -Resume, we don't look at suspendedProcesses array but just do another process scan
     # this might result in trying to resume new processes that weren't suspended (by us)
     # (probably doesn't matter but it's not very elegant)
-    foreach ($proc in Get-Process | Where-Object { $targetProcessNames -contains $_.Name })
+    foreach ($proc in Get-Process | Where-Object { $config.targetProcessNames -contains $_.Name })
     {
         #TODO: these might be useful properties:
         #        $proc.PagedMemorySize64
@@ -355,20 +399,6 @@ function Set-TargetProcessesState
         #        $proc.MainWindowTitle
         #        $proc.MainWindowHandle
         # see also: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process?view=net-8.0
-
-        if ($Launcher -and ($proc.Name -eq $Launcher))
-        {
-            Write-Debug "$($proc.Name) ignored as it was the launcher"
-            
-            Write-Host ($tableFormat -f
-                $proc.Name,
-                $proc.Id,
-                (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
-                "",
-                "<Ignoring Launcher>"
-            ) -ForegroundColor Gray
-            continue
-        }
 
         $proc.Refresh()  # refresh the memory stats for the process
 
@@ -378,6 +408,29 @@ function Set-TargetProcessesState
             Write-Debug "PID $($proc.Id) has already exited. Ignoring."
             continue
         }
+
+        if ($Launcher -and ($proc.Name -eq $Launcher))
+        {
+            Write-Debug "$($proc.Name) ignored as it is the launcher for the trigger process"
+            
+            Write-Host ($tableFormat -f
+                $proc.Name,
+                $proc.Id,
+                (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
+                "",
+                "<Ignoring Launcher>"
+            ) -ForegroundColor DarkGray
+
+            continue
+        }
+
+        # TODO: actually display this table using the Format-Table cmdlet like this...
+        <#
+        Get-Process | Format-Table @{ Label = "PID"; Expression={$_.Id}}, @{ Label = "Name"; Expression={$_.Name}},
+        @{ Label = "RAM"; Expression={
+            if ($_.WS -gt 100MB) { Write-Host -ForegroundColor Red $_.WS } else { $_.WS }
+        }}
+        #>      
 
         $totalRamUsage += $proc.WorkingSet64
 
@@ -434,6 +487,7 @@ function Set-TargetProcessesState
         {
             $windowTitle = "[$($proc.MainWindowTitle)]"
         }
+
         if (-not $NoDeltas)
         {
             Write-Host ($tableFormat -f
@@ -442,7 +496,7 @@ function Set-TargetProcessesState
                             (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
                             (ConvertTo-HumanReadable -Bytes $ramUsageDelta -DisplayPlus),
                             $windowTitle
-                        )
+                        )  -ForegroundColor (Get-BytesColour -Bytes $ramUsageDelta -NegativeIsPositive)
         }
         else
         {
@@ -452,7 +506,7 @@ function Set-TargetProcessesState
                             (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
                             "",
                             $windowTitle
-                        )
+                        )  -ForegroundColor (Get-BytesColour -Bytes $proc.WorkingSet64)
         }
 
         if (!$DryRun)
@@ -525,7 +579,7 @@ function Reset-Environment
 
     if ($suspendedProcesses)
     {
-        Set-TargetProcessesState -Resume
+        Set-TargetProcessesState -Resume -Launcher $launcher
     }
 
     if (Test-Path -Path $lockFilePath)
@@ -542,8 +596,8 @@ function Reset-Environment
     }
 
     # reset window appearance
-    $Host.UI.RawUI.BackgroundColor = 'Black'
-    $Host.UI.RawUI.ForegroundColor = 'White'
+    #$Host.UI.RawUI.BackgroundColor = 'Black'
+    #$Host.UI.RawUI.ForegroundColor = 'White'
 
     Write-Host "[Goodbye] o/"
 }
@@ -640,13 +694,52 @@ function Find-Launcher
 }
 
 
+function Write-Usage
+{
+    Write-Host ""
+    Write-Host "AutoSuspender $Version" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host @"
+Whenever chosen trigger processes (e.g. video games) are running,
+AutoSuspender automatically suspends chosen target processes (e.g. web
+browsers and instant messaging apps), and automatically resumes them when the
+trigger process ends.
+
+Suspended processes cannot use any CPU and Windows is more likely to move their
+memory from fast RAM (their "working set") to the slower pagefile on disk,
+leaving more of the RAM available for the trigger process (e.g. video game).
+
+When the trigger process closes, AutoSuspender will report how much the RAM
+usage ("working set") of the target processes dropped during their suspension.
+
+Command line arguments
+----------------------
+
+-Dry-Run   : Enables dry-run mode; the script doesn't actually suspend or
+resume any processes or minimise windows but does everything else. Useful for
+testing and measuring performance benefits of using AutoSuspender.
+
+-ResumeAll   : Resumes all target processes then run as normal.  Handy for when
+a previous invocation of the script failed to resume everything for some reason.
+
+-CheckOnce   : Checks for trigger processes only once, exiting immediately if
+none are running.  If one is running, performs usual operations then exits when
+the trigger process exits (after resuming the target processes).  You might use
+this if you arrange for the script to run every time Windows runs a new process.
+
+-TriggerProcessPollInterval #   : if # is a positive integer, AutoSuspender
+will poll the memory usage of the trigger process every # seconds.  This can
+be useful in gathering information but can have a small performance impact so
+is disabled by default.
+"@
+
+}
 
 # =============================================================================
 # =============================================================================
 
 # this prevents issues with external PS code when this script is compiled to a .exe:
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-
 
 # Define cleanup actions.  NB: does not work if terminal window is closed
 $cleanupAction = {
@@ -668,6 +761,24 @@ $null = Register-EngineEvent -SourceIdentifier ConsoleCancelEventHandler -Action
     Write-Host "Ctrl+C detected"
     & $cleanupAction
 }
+
+
+if ($Help)
+{
+    Write-Usage
+    exit 0
+}
+
+# Check if any unexpected arguments were provided
+# (they get leftover within $args)
+if ($args.Count -gt 0)
+{
+    Write-Error "Unexpected argument(s): $($args -join ', ')"
+    Write-Usage
+    exit 1
+}
+
+
 
 # a hash table used to map process PIDs to RAM (bytes) usages
 # used to save RAM usage of target processes just before they are suspended
@@ -714,21 +825,15 @@ if (-not (Test-Path -Path $configPath))
 
 $config = Get-Content -Path $configPath -Raw | ConvertFrom-Yaml
 
-# unpack config into variables
-$targetProcessNames = $config.targetProcessNames
-$triggerProcessNames = $config.triggerProcessNames
-$showNotifications = $config.showNotifications
-
-
-if ($showNotifications)
+if ($config.showNotifications)
 {
     Enable-Module -Name "BurntToast"
 }
 
 # change window appearance
-$Host.UI.RawUI.BackgroundColor = 'DarkMagenta'
-$Host.UI.RawUI.ForegroundColor = 'White'
-Clear-Host  # Clear the console to apply the new colors
+#$Host.UI.RawUI.BackgroundColor = 'Black'
+#$Host.UI.RawUI.ForegroundColor = 'White'
+#Clear-Host  # Clear the console to apply the new colors
 
 Write-Host "/===============\"
 Write-Host -NoNewline "| "
@@ -736,9 +841,16 @@ Write-RainbowText "AutoSuspender"
 Write-Host " |"
 Write-Host "\===============/"
 Write-Host "Running v$Version"
+if ($DryRun)
+{
+    Write-Host "Dry Run Enabled!  No suspending, resuming, or minimising will occur" -ForegroundColor Red
+}
 Write-Debug "scriptPath: $scriptPath"
 Write-Debug "TriggerProcessPollInterval: $TriggerProcessPollInterval"
 Write-Host ""
+
+# TODO: print tables using Format-Table like this:
+# Get-Process | Sort-Object -Property BasePriority | Format-Table -GroupBy BasePriority -Wrap
 
 if ($TriggerProcessPollInterval -lt 0)
 {
@@ -795,10 +907,13 @@ try
         }
 
         $wasIdleLastLoop = $true
-        $runningTriggerProcesses = Get-Process | Where-Object { $triggerProcessNames -contains $_.Name }
+        $runningTriggerProcesses = Get-Process | Where-Object { $config.triggerProcessNames -contains $_.Name }
 
-        $scriptProcess = Get-Process -Id $PID
-        $scriptProcessPreviousPriority = $scriptProcess.PriorityClass
+        if ($config.lowPriorityWaiting)
+        {
+            $scriptProcess = Get-Process -Id $PID
+            $scriptProcessPreviousPriority = $scriptProcess.PriorityClass
+        }
 
         if ($runningTriggerProcesses)
         {
@@ -808,9 +923,9 @@ try
             foreach ($runningTriggerProcess in $runningTriggerProcesses)
             {
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) {PriorityBoost: $($runningTriggerProcess.PriorityBoostEnabled)}"
-                if ($showNotifications)
+                if ($config.showNotifications)
                 {
-                    New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
+                   New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
                 }
             
                 $launcher = Find-Launcher -Process $runningTriggerProcess
@@ -821,13 +936,16 @@ try
                 }
             }
 
-            Write-Host "Setting AutoSuspender to a lower priority"
-            $scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
-            #$scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Idle   # equivalent to Task Manager "Low"
+            if ($config.lowPriorityWaiting)
+            {
+                Write-Host "Setting AutoSuspender to a lower priority"
+                $scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+                #$scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Idle   # equivalent to Task Manager "Low"
+            }
 
             # Minimise windows of all target processes
             # FIXME: doesn't work for certain apps (e.g. Microsoft Store apps like WhatsApp)
-            foreach ($proc in Get-Process | Where-Object { $targetProcessNames -contains $_.Name })
+            foreach ($proc in Get-Process | Where-Object { $config.targetProcessNames -contains $_.Name })
             {
                 try
                 {
@@ -869,28 +987,25 @@ try
                         $peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
                         $peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
 
-                        Write-Debug "Current peak working set: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakWorkingSet64)"
-                        Write-Debug "Current paged memory: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
+                        Write-Debug "$($runningTriggerProcess.Name) current peak working set: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakWorkingSet64)"
+                        Write-Debug "$($runningTriggerProcess.Name) current paged memory: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
                         Start-Sleep -Seconds $TriggerProcessPollInterval
                     }
+                    Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) exited"
+                    Write-Host "$($runningTriggerProcess.Name) peak working set: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
+                    Write-Host "$($runningTriggerProcess.Name) paged memory: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
                 }
                 else
                 {
                     $runningTriggerProcess.WaitForExit()   # blocking
 
-                    # these figures are unlikely to be correct once the process has exited
-                    $peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
-                    $peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
-                }
+                    # these figures are unreliable once the process has exited
+                    # as Windows clears the stats for terminated processes
+                    #$peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
+                    #$peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
 
-                if ($showNotifications)
-                {
-                    New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "AutoSuspender is resuming target processes." -AppLogo $playIconPath
+                    Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) Exited"
                 }
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) Exited"
-
-                Write-Host "Peak working set: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
-                Write-Host "Peak paged memory: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
 
                 # using Windows Performance Counters API:
                 #$counterPath = "\Process($($runningTriggerProcess.Name))\Working Set - Peak"
@@ -898,15 +1013,27 @@ try
                 #Write-Host "Windows Performance Counters API peak WS: $(ConvertTo-HumanReadable -Bytes $peakWSMemory)"
             }
 
-            Write-Host "Restoring AutoSuspender priority class"
-            $scriptProcess.PriorityClass = $scriptProcessPreviousPriority
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** All trigger processes have exited"
+           
+            if ($config.lowPriorityWaiting)
+            {
+                Write-Host "Restoring AutoSuspender priority class"
+                $scriptProcess.PriorityClass = $scriptProcessPreviousPriority
+            }
+
+            if ($config.showNotifications)
+            {
+                # FIXME: will only give the name of the last process to exit
+                New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "AutoSuspender is resuming target processes." -AppLogo $playIconPath
+            }
+            
 
             # FIXME: if you open a game and then you open another game before closing the first, closing the first
             # will result in resuming the suspended processes and then, 2s later, suspending them all again
             # which isn't very efficient.  However most people don't run multiple games at once so
             # this isn't a priority to fix
 
-            Set-TargetProcessesState -Resume
+            Set-TargetProcessesState -Resume -Launcher $launcher
             $suspendedProcesses = $false
             Remove-Item -Path $lockFilePath -Force -ErrorAction Continue
 
@@ -943,4 +1070,5 @@ finally
     Write-Host "Finally..."
     Reset-Environment
     Unregister-Event -SourceIdentifier ConsoleCancelEventHandler
+    Start-Sleep -Seconds 2
 }

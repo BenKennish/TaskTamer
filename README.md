@@ -3,7 +3,7 @@
 Whenever chosen _trigger_ processes (e.g. video games) are running,
 AutoSuspender automatically suspends chosen _target_ processes (e.g. web
 browsers and instant messaging apps), and automatically resumes them when the
-trigger process closes.
+trigger process ends.
 
 Suspended processes cannot use any CPU and Windows is more likely to move their
 memory from fast RAM (their "working set") to the slower pagefile on disk,
@@ -49,6 +49,9 @@ a previous invocation of the script failed to resume everything for some reason.
 none are running.  If one is running, performs usual operations then exits when
 the trigger process exits (after resuming the target processes).  You might use
 this if you arrange for the script to run every time Windows runs a new process.
+
+`-LowPriorityWaiting` : Script runs in low priority mode while waiting for the 
+trigger process to exit (to minimise performance impact).
 
 `-TriggerProcessPollInterval #` : if `#` is a positive integer, AutoSuspender
 will poll the memory usage of the trigger process every `#` seconds.  This can
