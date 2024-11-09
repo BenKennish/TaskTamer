@@ -34,3 +34,7 @@ targetProcessNames:
 
 # do we display Windows Action Center notifications?  true/false
 showNotifications: true
+
+# should AutoSuspender set itself to a low CPU priority when waiting for trigger
+# processes to close?
+lowPriorityWaiting: false

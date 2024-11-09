@@ -50,9 +50,6 @@ none are running.  If one is running, performs usual operations then exits when
 the trigger process exits (after resuming the target processes).  You might use
 this if you arrange for the script to run every time Windows runs a new process.
 
-`-LowPriorityWaiting` : Script runs in low priority mode while waiting for the 
-trigger process to exit (to minimise performance impact).
-
 `-TriggerProcessPollInterval #` : if `#` is a positive integer, AutoSuspender
 will poll the memory usage of the trigger process every `#` seconds.  This can
 be useful in gathering information but can have a small performance impact so
