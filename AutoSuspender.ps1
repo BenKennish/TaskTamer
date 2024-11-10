@@ -44,7 +44,7 @@ param (
     [int]$TriggerProcessPollInterval = 0
 )
 
-$Version = '0.8.5'
+$Version = '0.9.0'
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
