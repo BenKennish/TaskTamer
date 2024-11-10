@@ -18,6 +18,8 @@
 # TODO: allow setting CPU priority to Low for certain processes using $proc.PriorityClass property
 #       (and restore previous priority when the trigger process closes) rather than suspending them
 #
+# TODO: define list of processes to trim their working set (rather than full suspending)
+#
 # TODO: other ways to improve performance
 # - run user configurable list of commands when detecting a game  e.g. wsl --shutdown
 # - adjust windows visual settings
@@ -78,6 +80,8 @@ using System.Runtime.InteropServices;
 
 public class ProcessManager
 {
+    // suspend/resume functionality...
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenThread(int dwDesiredAccess, bool bInheritHandle, uint dwThreadId);
 
@@ -143,6 +147,7 @@ public class ProcessManager
     }
 
 
+    // minimize windows functionality...
 
     // Define constants for use with ShowWindow()
     private const int SW_MINIMIZE = 6;
@@ -175,7 +180,7 @@ public class ProcessManager
 
 
     // minimize all the user-facing windows of a specific process
-    // TODO: change this so you provide it an array of PIDs and do it all in one call?
+    // would be more efficient to provide it an array of PIDs and run only once
     public static int MinimizeProcessWindows(int pid)
     {
         int numWindowsMinimized = 0;
@@ -188,13 +193,17 @@ public class ProcessManager
             // if the window belongs to the process we are interested in
             if (processId == pid)
             {
-                //Console.WriteLine("Found a window for "+pid);
-
                 // minimize top-level windows that are visible and not already minimized
                 if (IsTopLevelWindow(hWnd) && IsWindowVisible(hWnd) && !IsIconic(hWnd))
                 {
-                    ShowWindow(hWnd, SW_MINIMIZE);
-                    numWindowsMinimized++;
+                    if (ShowWindow(hWnd, SW_MINIMIZE))
+                    {
+                        numWindowsMinimized++;
+                    }
+                    else
+                    {
+                        Console.WriteLine("Process "+pid+" Window "+hWnd+" failed to minimise");
+                    }
                 }
             }
             return true;
@@ -210,6 +219,9 @@ public class ProcessManager
         IntPtr hParent = GetParent(hWnd);
         return hParent == IntPtr.Zero; // If the parent is null, it's a top-level window
     }
+
+
+
 
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -910,6 +922,7 @@ Write-Host ""
 
 # TODO: print tables using Format-Table like this:
 # Get-Process | Sort-Object -Property BasePriority | Format-Table -GroupBy BasePriority -Wrap
+#
 
 if ($TriggerProcessPollInterval -lt 0)
 {
