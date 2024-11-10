@@ -18,10 +18,10 @@ triggerProcessNames:
 # list of process names (filename without ".exe") to minimise and suspend
 # whenever trigger processes are running
 targetProcessNames:
-  - chrome
-  - brave
-  - firefox
-  - msedge
+  - Chrome
+  - Brave
+  - Firefox
+  - MSEdge
   - Spotify
   - WhatsApp
   - Signal

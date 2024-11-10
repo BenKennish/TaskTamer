@@ -40,6 +40,7 @@ param (
     [switch]$ResumeAll,
     [switch]$CheckOnce,
     [switch]$Debug,
+    [switch]$TrimWorkingSet,
     [int]$TriggerProcessPollInterval = 0
 )
 
@@ -54,14 +55,15 @@ if ($Debug)
     $ErrorActionPreference = "Stop"  # should force instant error messages
     $PSDefaultParameterValues['*:ErrorAction'] = 'Stop'
     $PSDefaultParameterValues['*:Verbose'] = $true
-    Set-PSDebug -Trace 2
+    #Set-PSDebug -Trace 2
 }
 
 
 # Hashtable of known launchers
-# key: process name, value: descriptive name
-# TODO: maybe this could go in the config file?
+# key: process name (lowercase), value: descriptive name
+# TODO: maybe this could go in the config file
 # TODO: perhaps we can have some optimisation code specific to the different launchers
+#
 $launchers = @{
     'steam'             = 'Steam'
     'epicgameslauncher' = 'Epic Games Launcher'
@@ -74,7 +76,6 @@ $launchers = @{
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-using System.Diagnostics;
 
 public class ProcessManager
 {
@@ -87,19 +88,10 @@ public class ProcessManager
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern int ResumeThread(IntPtr hThread);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr hObject);
 
     private const int THREAD_SUSPEND_RESUME = 0x0002;
-
-
-    [DllImport("user32.dll")]
-    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsIconic(IntPtr hWnd);
-
-    public const int SW_MINIMIZE = 6;
 
 
     public static void SuspendProcess(int pid)
@@ -152,53 +144,102 @@ public class ProcessManager
     }
 
 
+
+    // Define constants for use with ShowWindow()
+    private const int SW_MINIMIZE = 6;
+    private const int SW_RESTORE = 9;
+
+   
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd); 
+    // Checks if window is minimized (iconified)
+
+    [DllImport("user32.dll")]
+    public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
+    
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    // Delegate for enumerating windows
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetParent(IntPtr hWnd);
+
+
+    // minimize all the user-facing windows of a specific process
+    // TODO: change this so you provide it an array of PIDs and do it all in one call?
     public static int MinimizeProcessWindows(int pid)
     {
-        var numWindowsMinimised = 0;
+        int numWindowsMinimized = 0;
 
-        // minimises the main window handle
-        // possibly unnecessary as this window will be minimised below anyway
+        EnumWindows((hWnd, lParam) =>
+        {
+            int processId;
+            GetWindowThreadProcessId(hWnd, out processId);
+
+            // if the window belongs to the process we are interested in
+            if (processId == pid)
+            {
+                //Console.WriteLine("Found a window for "+pid);
+
+                // minimize top-level windows that are visible and not already minimized
+                if (IsTopLevelWindow(hWnd) && IsWindowVisible(hWnd) && !IsIconic(hWnd))
+                {
+                    ShowWindow(hWnd, SW_MINIMIZE);
+                    numWindowsMinimized++;
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        return numWindowsMinimized;
+    }
+
+
+    // Helper function to check if the window is a top-level window
+    private static bool IsTopLevelWindow(IntPtr hWnd)
+    {
+        IntPtr hParent = GetParent(hWnd);
+        return hParent == IntPtr.Zero; // If the parent is null, it's a top-level window
+    }
+
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
+
+    // force OS to decrease a process' working set
+    public static void TrimWorkingSet(int pid)
+    {
         var process = System.Diagnostics.Process.GetProcessById(pid);
 
-        if (process.MainWindowHandle != IntPtr.Zero) // && !IsIconic(process.MainWindowHandle))
-        {
-            if (!ShowWindow(process.MainWindowHandle, SW_MINIMIZE))
-            {
-                Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                //int errorCode = Marshal.GetLastWin32Error();
-                //Console.WriteLine("Failed to minimize window for process "+process.ProcessName+". Error code: "+errorCode);
-            }
-            else
-            {
-                numWindowsMinimised++;
-            }
-        }
+        // When both dwMinimumWorkingSetSize and dwMaximumWorkingSetSize are set to -1, Windows will 
+        // automatically trim the process’s working set to the bare minimum required to keep it 
+        // running. This operation is often referred to as trimming the working set.
+        
+        bool res = SetProcessWorkingSetSize(process.Handle, (IntPtr)(-1), (IntPtr)(-1));
 
-        // minimize other windows of the process
-        // FIXME: doesn't seem to minimise all the windows
-        foreach (var window in System.Diagnostics.Process.GetProcesses())
+        if (!res)
         {
-            if (window.Id == pid
-                && window.MainWindowHandle != IntPtr.Zero
-                //&& !IsIconic(window.MainWindowHandle)
-                )
-            {
-                if (!ShowWindow(window.MainWindowHandle, SW_MINIMIZE))
-                {
-                    Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                    //int errorCode = Marshal.GetLastWin32Error();
-                    //Console.WriteLine("Failed to minimize window for process "+process.ProcessName+". Error code: "+errorCode);
-                }
-                numWindowsMinimised++;
-            }
+            int errorCode = Marshal.GetLastWin32Error();
+            throw new System.ComponentModel.Win32Exception(errorCode, "Failed to trim the working set for PID "+pid);
         }
-
-        return numWindowsMinimised;
     }
 
 }
 
 "@
+
+# Add C# code to the PowerShell session
+#Add-Type -TypeDefinition $code 
 
 
 # Helper function to import a module, installing it first if necessary
@@ -420,7 +461,8 @@ function Set-TargetProcessesState
                 "",
                 "<Ignoring Launcher>"
             ) -ForegroundColor DarkGray
-
+            
+            # skip over this process, no stats stuff
             continue
         }
 
@@ -514,7 +556,7 @@ function Set-TargetProcessesState
             try
             {
                 if ($Suspend)
-                {
+                {   
                     [ProcessManager]::SuspendProcess($proc.Id)
                 }
                 elseif ($Resume)
@@ -534,6 +576,15 @@ function Set-TargetProcessesState
                 Write-Host "ERROR: Failed to $($verb) $($proc.Name) ($($proc.Id)):"
                 Write-Host "$_"
             }
+
+            if ($Suspend -and $TrimWorkingSet)
+            {
+                [ProcessManager]::TrimWorkingSet($proc.Id)                
+                Start-Sleep -Milliseconds 100
+                $proc.Refresh()
+                Write-Host "<Trimmed: $(ConvertTo-HumanReadable -Bytes $proc.WorkingSet64)>" -ForegroundColor Magenta
+            }
+
         }
 
         $lastProcessName = $proc.name
@@ -726,6 +777,8 @@ a previous invocation of the script failed to resume everything for some reason.
 none are running.  If one is running, performs usual operations then exits when
 the trigger process exits (after resuming the target processes).  You might use
 this if you arrange for the script to run every time Windows runs a new process.
+
+-TrimWorkingSet : Trims the working set of target processes after suspending them.
 
 -TriggerProcessPollInterval #   : if # is a positive integer, AutoSuspender
 will poll the memory usage of the trigger process every # seconds.  This can
@@ -940,7 +993,7 @@ try
             {
                 Write-Host "Setting AutoSuspender to a lower priority"
                 $scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
-                #$scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::Idle   # equivalent to Task Manager "Low"
+                # ProcessPriorityClass]::Idle is Task Manager's "Low"
             }
 
             # Minimise windows of all target processes
@@ -952,12 +1005,18 @@ try
                     $numWindowsMinimised = 0;
                     if (!$DryRun)
                     {
-                        $numWindowsMinimised = [ProcessManager]::MinimizeProcessWindows($proc.Id)
-                    }
-
-                    if ($numWindowsMinimised)
-                    {
-                        Write-Output "Minimised: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]"
+                        try
+                        {
+                            $numWindowsMinimised = [ProcessManager]::MinimizeProcessWindows($proc.Id)
+                            if ($numWindowsMinimised)
+                            {
+                                Write-Output "Minimised: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]"
+                            }
+                        }
+                        catch
+                        {
+                            Write-Debug "Error minimising windows for PID $($proc.ID): $_"
+                        }
                     }
                 }
                 catch
@@ -988,12 +1047,12 @@ try
                         $peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
 
                         Write-Debug "$($runningTriggerProcess.Name) current peak working set: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakWorkingSet64)"
-                        Write-Debug "$($runningTriggerProcess.Name) current paged memory: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
+                        Write-Debug "$($runningTriggerProcess.Name) current peak paged memory: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
                         Start-Sleep -Seconds $TriggerProcessPollInterval
                     }
                     Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) exited"
                     Write-Host "$($runningTriggerProcess.Name) peak working set: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
-                    Write-Host "$($runningTriggerProcess.Name) paged memory: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
+                    Write-Host "$($runningTriggerProcess.Name) peak paged memory: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
                 }
                 else
                 {
@@ -1070,5 +1129,5 @@ finally
     Write-Host "Finally..."
     Reset-Environment
     Unregister-Event -SourceIdentifier ConsoleCancelEventHandler
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 1
 }
