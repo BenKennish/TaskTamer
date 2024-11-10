@@ -54,3 +54,11 @@ this if you arrange for the script to run every time Windows runs a new process.
 will poll the memory usage of the trigger process every `#` seconds.  This can
 be useful in gathering information but can have a small performance impact so
 is disabled by default.
+
+`-TrimWorkingSet` : Trim the working set of all target processes immediately 
+after they are suspended.
+
+`-Help` : Displays short description of AutoSuspender and a list of possible
+command line arguments
+
+`-Debug` : Enables debugging mode, making the script a lot more verbose.
