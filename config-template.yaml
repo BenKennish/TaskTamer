@@ -1,40 +1,41 @@
 # @=======================
 # AutoSuspender config file template (YAML format)
 # ***DO NOT MODIFY***: The actual config file used by the script is config.yaml
-# Please edit config.yaml instead 
+# Please edit config.yaml instead
 # (it's autocreated from this template on running AutoSuspender)
 # =======================@
 # any text after a '#'' sign is ignored by AutoSuspender
 
 # list of process names (filename without ".exe")
 # to act as triggers (e.g. video games)
-triggerProcessNames:  
-  - FortniteClient-Win64-Shipping
-  - RocketLeague
-  - Overwatch
-  - GW2-64
-  - Among Us
+triggerProcessNames:
+    - FortniteClient-Win64-Shipping
+    - RocketLeague
+    - Overwatch
+    - GW2-64
+    - Among Us
 
-# list of process names (filename without ".exe") to minimise and suspend
-# whenever trigger processes are running
+# list of process names (filename without ".exe") that AutoSuspender will
+# minimise and suspend whenever any trigger processes are running
 targetProcessNames:
-  - Chrome
-  - Brave
-  - Firefox
-  - MSEdge
-  - Spotify
-  - WhatsApp
-  - Signal
-# the next 3 are game launchers
-# AutoSuspender will not suspended launchers that were used to launch
-# the trigger process
-  - Steam
-  - EpicGamesLauncher
-  - Battle.net
+    - Chrome
+    - Brave
+    - Firefox
+    - MSEdge
+    - Spotify
+    - WhatsApp
+    - Signal
+    # the next 3 processes are game launchers known to AutoSuspender.
+    # even if they are included here, AutoSuspender will never suspend
+    # any that were used to launch the trigger process because this can mess
+    # the trigger process up
+    - Steam
+    - EpicGamesLauncher
+    - Battle.net
 
 # do we display Windows Action Center notifications?  true/false
 showNotifications: true
 
 # should AutoSuspender set itself to a low CPU priority when waiting for trigger
-# processes to close?
+# processes to close?  true/false
 lowPriorityWaiting: false

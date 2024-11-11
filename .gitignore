@@ -4,3 +4,6 @@
 *.zip
 config.yaml
 create-release.ps1
+sandbox.ps1
+.prettierrc
+scratchpad.txt

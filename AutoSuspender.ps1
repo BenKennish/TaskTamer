@@ -38,7 +38,7 @@
 # TODO: exit on getting unrecognised command line arguments
 param (
     [switch]$Help,
-    [switch]$DryRun,
+    [switch]$WhatIf,
     [switch]$ResumeAll,
     [switch]$CheckOnce,
     [switch]$Debug,
@@ -54,6 +54,7 @@ $ErrorActionPreference = "Stop"
 if ($Debug)
 {
     $DebugPreference = 'Continue'    # this will enable/disable the display of Write-Debug messages, "SilentlyContinue" is the default
+    $VerbosePreference = 'Continue'
     $PSDefaultParameterValues['*:ErrorAction'] = 'Stop'
     $PSDefaultParameterValues['*:Verbose'] = $true
     #Set-PSDebug -Trace 2
@@ -288,7 +289,7 @@ function Enable-Module
 function ConvertTo-HumanReadable
 {
     param (
-        [Parameter(Mandatory=$true)] [int64]$Bytes,
+        [Parameter(Mandatory = $true)] [int64]$Bytes,
         [int]$DecimalDigits = 1,
         [switch]$DisplayPlus
     )
@@ -298,7 +299,7 @@ function ConvertTo-HumanReadable
 
     if ($Bytes -eq 0)
     {
-        return "0"
+        return "0 B"
     }
 
     while ([Math]::Abs($Bytes) -ge 1024 -and $unitIndex -lt $units.Length - 1)
@@ -336,18 +337,18 @@ function Write-Subtotal
         if ($null -ne $SameProcessRamDeltaTotal)
         {
             Write-Host ($tableFormat -f "$LastProcessName",
-                        "+++++",
+                "+++++",
                         (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal),
                         (ConvertTo-HumanReadable -Bytes $SameProcessRamDeltaTotal),
-                        "") -ForegroundColor Yellow
+                "") -ForegroundColor Yellow
         }
         else
         {
             Write-Host ($tableFormat -f "$lastProcessName",
-                        "+++++",
+                "+++++",
                         (ConvertTo-HumanReadable -Bytes $sameProcessRamTotal),
-                        "",
-                        "") -ForegroundColor Yellow
+                "",
+                "") -ForegroundColor Yellow
         }
     }
 }
@@ -357,7 +358,7 @@ function Get-BytesColour
 {
     param (
         [Parameter(Mandatory = $true)] [int64]$Bytes,
-        [switch]$NegativeIsPositive,  # if set, the more negative a number is, the better it is.
+        [switch]$NegativeIsPositive, # if set, the more negative a number is, the better it is.
         [string]$BadColour = "Red"   # what colour to use if the number is bad
     )
 
@@ -393,10 +394,10 @@ function Set-TargetProcessesState
 {
     [CmdletBinding(DefaultParameterSetName = 'Suspend')]
     param (
-        [Parameter(ParameterSetName = 'Suspend', Mandatory=$true)]
+        [Parameter(ParameterSetName = 'Suspend', Mandatory = $true)]
         [switch]$Suspend,
 
-        [Parameter(ParameterSetName = 'Resume', Mandatory=$true)]
+        [Parameter(ParameterSetName = 'Resume', Mandatory = $true)]
         [switch]$Resume,
         [Parameter(ParameterSetName = 'Resume')]
         [switch]$NoDeltas,
@@ -457,13 +458,13 @@ function Set-TargetProcessesState
         # ignore processes that aren't running anymore
         if ($proc.HasExited)
         {
-            Write-Debug "PID $($proc.Id) has already exited. Ignoring."
+            Write-Verbose "PID $($proc.Id) has already exited. Ignoring."
             continue
         }
 
         if ($Launcher -and ($proc.Name -eq $Launcher))
         {
-            Write-Debug "$($proc.Name) ignored as it is the launcher for the trigger process"
+            Write-Verbose "$($proc.Name) ignored as it is the launcher for the trigger process"
             
             Write-Host ($tableFormat -f
                 $proc.Name,
@@ -544,25 +545,25 @@ function Set-TargetProcessesState
         if (-not $NoDeltas)
         {
             Write-Host ($tableFormat -f
-                            $proc.Name,
-                            $proc.Id,
-                            (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
-                            (ConvertTo-HumanReadable -Bytes $ramUsageDelta -DisplayPlus),
-                            $windowTitle
-                        )  -ForegroundColor (Get-BytesColour -Bytes $ramUsageDelta -NegativeIsPositive)
+                $proc.Name,
+                $proc.Id,
+                (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
+                (ConvertTo-HumanReadable -Bytes $ramUsageDelta -DisplayPlus),
+                $windowTitle
+            )  -ForegroundColor (Get-BytesColour -Bytes $ramUsageDelta -NegativeIsPositive)
         }
         else
         {
             Write-Host ($tableFormat -f
-                            $proc.Name,
-                            $proc.Id,
-                            (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
-                            "",
-                            $windowTitle
-                        )  -ForegroundColor (Get-BytesColour -Bytes $proc.WorkingSet64)
+                $proc.Name,
+                $proc.Id,
+                (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
+                "",
+                $windowTitle
+            )  -ForegroundColor (Get-BytesColour -Bytes $proc.WorkingSet64)
         }
 
-        if (!$DryRun)
+        if (!$WhatIf)
         {
             try
             {
@@ -593,7 +594,7 @@ function Set-TargetProcessesState
                 [ProcessManager]::TrimWorkingSet($proc.Id)                
                 Start-Sleep -Milliseconds 100
                 $proc.Refresh()
-                Write-Host "<Trimmed: $(ConvertTo-HumanReadable -Bytes $proc.WorkingSet64)>" -ForegroundColor Magenta
+                Write-Host "<RAM trimmed down to: $(ConvertTo-HumanReadable -Bytes $proc.WorkingSet64)>" -ForegroundColor Magenta
             }
 
         }
@@ -610,11 +611,11 @@ function Set-TargetProcessesState
     if (-not $NoDeltas)
     {
         Write-Host ($tableFormat -f
-                    "<TOTAL>",
-                    "+++++",
+            "<TOTAL>",
+            "+++++",
                     (ConvertTo-HumanReadable -Bytes $totalRamUsage),
                     (ConvertTo-HumanReadable -Bytes $totalRamDelta -DisplayPlus),
-                    "") -ForegroundColor Yellow
+            "") -ForegroundColor Yellow
     }
     else
     {
@@ -716,7 +717,7 @@ function Find-Launcher
             # Check if the current process is in the launcher hashtable
             if ($launchers.ContainsKey($currentProcess.Name.ToLower()))
             {
-                Write-Debug "Found launcher: $($currentProcess.Name) ($($launchers[$currentProcess.Name.ToLower()])) for process: $($Process.Name)"
+                Write-Verbose "Found launcher: $($currentProcess.Name) ($($launchers[$currentProcess.Name.ToLower()])) for process: $($Process.Name)"
                 return $currentProcess.Name
             }
 
@@ -726,7 +727,7 @@ function Find-Launcher
             # Break if there is no parent (reached the top of the process tree)
             if (-not $parentProcessId)
             {
-                Write-Debug "No parent process found for '$($Process.Name)'."
+                Write-Verbose "No parent process found for '$($Process.Name)'."
                 return
             }
 
@@ -735,12 +736,12 @@ function Find-Launcher
 
             if (-not $currentProcess)
             {
-                Write-Debug "Parent process (PID: $parentProcessId) no longer running for '$($process.Name)'."
+                Write-Verbose "Parent process (PID: $parentProcessId) no longer running for '$($process.Name)'."
                 return
             }
 
             # Optionally output the current checking process
-            Write-Debug "Checking parent process: $($currentProcess.Name)"
+            Write-Verbose "Checking parent process: $($currentProcess.Name)"
         }
         catch 
         {
@@ -751,7 +752,7 @@ function Find-Launcher
         }
     }
 
-    Write-Debug "No launcher found for game: $($gameProcess.Name)."
+    Write-Verbose "No launcher found for game: $($gameProcess.Name)."
     return $null
 }
 
@@ -767,34 +768,40 @@ AutoSuspender automatically suspends chosen target processes (e.g. web
 browsers and instant messaging apps), and automatically resumes them when the
 trigger process ends.
 
-Suspended processes cannot use any CPU and Windows is more likely to move their
-memory from fast RAM (their "working set") to the slower pagefile on disk,
-leaving more of the RAM available for the trigger process (e.g. video game).
+Suspended target processes are effectively frozen / sleeping and therefore
+can't slow down the trigger process by using the CPU in the background.
+Windows is also more likely to move memory used by target processes from fast
+RAM (known as their "working set") to the slower pagefile on disk, which leaves
+more lovely speedy RAM available for the trigger process (e.g. video game) to
+use.
 
 When the trigger process closes, AutoSuspender will report how much the RAM
-usage ("working set") of the target processes dropped during their suspension.
+usage of the target processes dropped during their suspension.
+
+It can also keep track of the trigger processes memory usage using the
+-TriggerProcessPollInterval command line argument.
 
 Command line arguments
 ----------------------
 
-`-Dry-Run` : Enables dry-run mode; the script doesn't actually suspend or
+`-WhatIf` : Enables "what if" mode; the script doesn't actually suspend or
 resume any processes or minimise windows but does everything else. Useful for
 testing and measuring performance benefits of using AutoSuspender.
 
-`-ResumeAll` : Resumes all target processes then run as normal.  Handy for when
+`-ResumeAll` : Resumes all target processes then run as normal. Handy for when
 a previous invocation of the script failed to resume everything for some reason.
 
 `-CheckOnce` : Checks for trigger processes only once, exiting immediately if
-none are running.  If one is running, performs usual operations then exits when
-the trigger process exits (after resuming the target processes).  You might use
+none are running. If one is running, performs usual operations then exits when
+the trigger process exits (after resuming the target processes). You might use
 this if you arrange for the script to run every time Windows runs a new process.
 
 `-TriggerProcessPollInterval #` : if `#` is a positive integer, AutoSuspender
-will poll the memory usage of the trigger process every `#` seconds.  This can
-be useful in gathering information but can have a small performance impact so
-is disabled by default.
+will poll the memory usage of the trigger process every `#` seconds. This can
+be useful for gathering bencmarking data but can have a small performance
+impact so is disabled by default.
 
-`-TrimWorkingSet` : Trim the working set of all target processes immediately 
+`-TrimWorkingSet` : Trim the working set of all target processes immediately
 after they are suspended.
 
 `-Help` : Displays short description of AutoSuspender and a list of possible
@@ -805,6 +812,72 @@ command line arguments
 "@
 
 }
+
+
+# if there are any keys in the read buffer, keep reading them
+# until either the character $KeyCharacter is found, or until
+# there are no more keys in the buffer.  
+# returns $true if $KeyCharacter was found, else $false
+# 
+function Test-KeyPress
+{
+    param (
+        [Parameter(Mandatory = $true)]
+        [char]$KeyCharacter
+    )
+    
+    while ([Console]::KeyAvailable)
+    {
+        $keyPressed = [Console]::ReadKey($true)
+
+        if ($keyPressed.KeyChar -eq $KeyCharacter)
+        {
+            return $true
+        }
+    }
+    return $false
+}
+
+
+# wait for the supplied number of seconds for the user to press the supplied character
+# return true if they pressed it or false if they didn't
+function Wait-ForKeyPress
+{
+    param (
+        [Parameter(Mandatory = $true)]
+        [int]$Seconds,
+        
+        [Parameter(Mandatory = $true)]
+        [char]$KeyCharacter,
+
+        [switch]$WaitFullDuration
+        # if set, we don't poll but just report if key was pressed at end
+        # can lead to unresponsive feeling if $Seconds is high
+    )
+
+    if ($WaitFullDuration)
+    {
+        # sleep the whole duration
+        Start-Sleep -Seconds $Seconds
+        return Test-KeyPress -KeyCharacter $KeyCharacter
+    }
+    else
+    {
+        $deadline = (Get-Date).AddSeconds($Seconds)
+        
+        while ((Get-Date) -lt $deadline)
+        {
+            if (Test-KeyPress -KeyCharacter $KeyCharacter)
+            {
+                return $true
+            }
+            Start-Sleep -Milliseconds 100  # polling interval 100ms
+        }
+    }
+    return $false
+
+}
+
 
 # =============================================================================
 # =============================================================================
@@ -823,9 +896,9 @@ $cleanupAction = {
 
 # Register the AppDomain's ProcessExit event for general script termination
 [System.AppDomain]::CurrentDomain.add_ProcessExit({
-    Write-Host "ProcessExit() triggered"
-    & $cleanupAction
-})
+        Write-Host "ProcessExit() triggered"
+        & $cleanupAction
+    })
 
 # Register for Ctrl+C handling, see also 'ConsoleBreak'
 $null = Register-EngineEvent -SourceIdentifier ConsoleCancelEventHandler -Action {
@@ -872,11 +945,11 @@ else
     $scriptPath = [System.IO.Path]::GetDirectoryName([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 }
 
-$lockFilePath  = Join-Path -Path $scriptPath -ChildPath "/lock.pid"
-$configPath    = Join-Path -Path $scriptPath -ChildPath "/config.yaml"
-$templatePath  = Join-Path -Path $scriptPath -ChildPath "/config-template.yaml"
+$lockFilePath = Join-Path -Path $scriptPath -ChildPath "/lock.pid"
+$configPath = Join-Path -Path $scriptPath -ChildPath "/config.yaml"
+$templatePath = Join-Path -Path $scriptPath -ChildPath "/config-template.yaml"
 $pauseIconPath = Join-Path -Path $scriptPath -ChildPath "/images/pause.ico"
-$playIconPath  = Join-Path -Path $scriptPath -ChildPath "/images/play.ico"
+$playIconPath = Join-Path -Path $scriptPath -ChildPath "/images/play.ico"
 
 # read YAML config file
 Enable-Module -Name "powershell-yaml"
@@ -890,7 +963,7 @@ $configYamlHeader = @"
 if (-not (Test-Path -Path $configPath))
 {    
     # read in the text of the templateFile, remove the header, replace with our header, then save 
-    # (?s) dotall mode to make . match newline characters   "(?s)# @=.*=@"
+    # (?s) dotall mode to make . match newline characters
     ((Get-Content -Path $templatePath -Raw) -replace "(?s)# @=+\s.*?=+@", $configYamlHeader) | Out-File -FilePath $configPath -Force
 }
 
@@ -912,12 +985,12 @@ Write-RainbowText "AutoSuspender"
 Write-Host " |"
 Write-Host "\===============/"
 Write-Host "Running v$Version"
-if ($DryRun)
+if ($WhatIf)
 {
     Write-Host "Dry Run Enabled!  No suspending, resuming, or minimising will occur" -ForegroundColor Red
 }
-Write-Debug "scriptPath: $scriptPath"
-Write-Debug "TriggerProcessPollInterval: $TriggerProcessPollInterval"
+Write-Verbose "scriptPath: $scriptPath"
+Write-Verbose "TriggerProcessPollInterval: $TriggerProcessPollInterval"
 Write-Host ""
 
 # TODO: print tables using Format-Table like this:
@@ -933,7 +1006,7 @@ if ($TriggerProcessPollInterval -lt 0)
 if (Test-Path -Path $lockFilePath)
 {
     $pidInLockFile = Get-Content -Path $lockFilePath
-    Write-Debug "Lock file exists and contains '$($pidInLockFile)'"
+    Write-Verbose "Lock file exists and contains '$($pidInLockFile)'"
 
     if (-not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue))
     {
@@ -974,7 +1047,7 @@ try
             }
             else
             {
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Listening for trigger processes..."
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Listening for trigger processes {Press Q to Quit}..."
             }
         }
 
@@ -997,7 +1070,7 @@ try
                 Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) {PriorityBoost: $($runningTriggerProcess.PriorityBoostEnabled)}"
                 if ($config.showNotifications)
                 {
-                   New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
+                    New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
                 }
             
                 $launcher = Find-Launcher -Process $runningTriggerProcess
@@ -1022,7 +1095,7 @@ try
                 try
                 {
                     $numWindowsMinimised = 0;
-                    if (!$DryRun)
+                    if (!$WhatIf)
                     {
                         try
                         {
@@ -1034,7 +1107,7 @@ try
                         }
                         catch
                         {
-                            Write-Debug "Error minimising windows for PID $($proc.ID): $_"
+                            Write-Verbose "Error minimising windows for PID $($proc.ID): $_"
                         }
                     }
                 }
@@ -1065,8 +1138,8 @@ try
                         $peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
                         $peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
 
-                        Write-Debug "$($runningTriggerProcess.Name) current peak working set: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakWorkingSet64)"
-                        Write-Debug "$($runningTriggerProcess.Name) current peak paged memory: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
+                        Write-Verbose "$($runningTriggerProcess.Name) current peak working set: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakWorkingSet64)"
+                        Write-Verbose "$($runningTriggerProcess.Name) current peak paged memory: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
                         Start-Sleep -Seconds $TriggerProcessPollInterval
                     }
                     Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) exited"
@@ -1131,9 +1204,13 @@ try
 
         if (-not ($wasIdleLastLoop))
         {
-            Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds..."
+            Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds... {Press Q to Quit}"
         }
-        Start-Sleep -Seconds 3
+        
+        if (Wait-ForKeyPress -Seconds 3 -KeyCharacter "Q")
+        {
+            break  #while
+        }
     }
 }
 catch
