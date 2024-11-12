@@ -1,2 +1,6 @@
-# Force CRLF line endings for all text files
-* text=auto eol=crlf
+# Force CRLF line endings (Windows style)
+# on checkout of all text files 
+*       text=auto eol=crlf
+
+# Exclude git related files from exporting into the release .zip/.tar.gz files
+.git*   export-ignore

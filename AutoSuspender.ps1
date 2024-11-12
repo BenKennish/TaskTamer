@@ -42,22 +42,35 @@ param (
     [switch]$ResumeAll,
     [switch]$CheckOnce,
     [switch]$Debug,
+    [switch]$Verbose,
     [switch]$TrimWorkingSet,
     [int]$TriggerProcessPollInterval = 0
 )
 
-$Version = '0.9.2'
+$Version = '0.9.3'
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version Latest   # stricter rules = cleaner code  :)
+
+# default behavior for non-terminating errors (i.e., errors that don’t normally stop execution, like warnings)
+# global preference variable that affects all cmdlets and functions that you run after this line is executed.
 $ErrorActionPreference = "Stop"
 
-if ($Debug)
+# modifies the default value of the -ErrorAction parameter for every cmdlet that has the -ErrorAction parameter
+$PSDefaultParameterValues['*:ErrorAction'] = 'Stop'
+
+if ($Verbose -or $Debug)
 {
-    $DebugPreference = 'Continue'    # this will enable/disable the display of Write-Debug messages, "SilentlyContinue" is the default
-    $VerbosePreference = 'Continue'
-    $PSDefaultParameterValues['*:ErrorAction'] = 'Stop'
-    $PSDefaultParameterValues['*:Verbose'] = $true
-    #Set-PSDebug -Trace 2
+    $VerbosePreference = 'Continue'    # enable display of Write-Verbose messages ("SilentlyContinue" is the default)
+
+    # modifies the default value of the Verbose parameter for every cmdlet that has the -Verbose parameter
+    $PSDefaultParameterValues['*:Verbose'] = $true  # get cmdlets to be Verbose by default
+
+    if ($Debug)
+    {
+        $DebugPreference = 'Continue'  # enable display of Write-Debug messages ("SilentlyContinue" is the default)
+        #Set-PSDebug -Strict    #not necessary as using Set-StrictMode
+        Set-PSDebug -Trace 1  # 0 = off, 1 = trace each line, 2 = trace variable assignments, function calls, and script calls too
+    }
 }
 
 
@@ -658,10 +671,6 @@ function Reset-Environment
         }
     }
 
-    # reset window appearance
-    #$Host.UI.RawUI.BackgroundColor = 'Black'
-    #$Host.UI.RawUI.ForegroundColor = 'White'
-
     Write-Host "[Goodbye] o/"
 }
 
@@ -805,7 +814,9 @@ impact so is disabled by default.
 after they are suspended.
 
 `-Help` : Displays short description of AutoSuspender and a list of possible
-command line arguments
+command line arguments.
+
+`-Verbose` : The script will be more talkative about what's going on.
 
 `-Debug` : Enables debugging mode, making the script a lot more verbose.
 
@@ -918,6 +929,7 @@ if ($Help)
 if ($args.Count -gt 0)
 {
     Write-Error "Unexpected argument(s): $($args -join ', ')"
+    #TODO: see if we get past this line when ErrorActionPreference is set to Stop
     Write-Usage
     exit 1
 }
@@ -937,19 +949,106 @@ $tableFormat = "{0,-17} {1,-6} {2,10} {3,11} {4,-10}"
 # the path of the folder where the script is located
 if ($MyInvocation.MyCommand.Path)
 {
-    $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $fullScriptPath = $MyInvocation.MyCommand.Path
+    $scriptFolder = Split-Path -Parent $fullScriptPath
 }
 else
 {
     # We are likely a compiled executable so we need to get the path like this:
-    $scriptPath = [System.IO.Path]::GetDirectoryName([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+    $fullScriptPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $scriptFolder = [System.IO.Path]::GetDirectoryName($fullScriptPath)
+    # TODO test this!
 }
 
-$lockFilePath = Join-Path -Path $scriptPath -ChildPath "/lock.pid"
-$configPath = Join-Path -Path $scriptPath -ChildPath "/config.yaml"
-$templatePath = Join-Path -Path $scriptPath -ChildPath "/config-template.yaml"
-$pauseIconPath = Join-Path -Path $scriptPath -ChildPath "/images/pause.ico"
-$playIconPath = Join-Path -Path $scriptPath -ChildPath "/images/play.ico"
+$lockFilePath = Join-Path -Path $scriptFolder -ChildPath "/lock.pid"
+$configPath = Join-Path -Path $scriptFolder -ChildPath "/config.yaml"
+$templatePath = Join-Path -Path $scriptFolder -ChildPath "/config-template.yaml"
+$pauseIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/pause.ico"
+$playIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/play.ico"
+
+# Define the shortcut path (same folder and filename as the script, but with a .lnk extension)
+$shortcutPath = Join-Path -Path $scriptFolder -ChildPath "$([System.IO.Path]::GetFileNameWithoutExtension($fullScriptPath)).lnk"
+
+
+# Function to validate if a TargetPath (e.g. within a Windows Shortcut) has an existing target file
+# the Target Path might have quotation marks around and spaces within the first argument
+# and might include additional command line arguments
+function Test-CmdLineTarget
+{
+    param (
+        [string]$CmdLine
+    )
+
+    Write-Verbose "Test-CmdLineTarget testing..."
+    Write-Verbose $CmdLine
+
+    # Use PowerShell's command-line parsing to properly handle quoted paths
+    #$cmdArgs = [System.Management.Automation.CommandLine]::ParseCommandLine($CmdLine)
+
+    # Create the ProcessStartInfo object
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.Arguments = $CmdLine
+
+    # Parse the arguments
+    # FIXME: this doesnt work properly when there are quoted args with surrounding " marks
+    $cmdArgs = $startInfo.Arguments.Split(' ')
+
+    Write-Host "Parsed Arguments:"
+    Write-Host $cmdArgs
+    
+    # The first element of $cmdArgs should be the target file
+    $targetFile = $cmdArgs[0]
+    Write-Verbose "targetFile: $targetFile"
+
+    # Check if the file exists
+    if (Test-Path $targetFile)
+    {
+        return $true
+    }
+    return $false
+}
+
+
+$existingValidShortcut = $false
+$shell = New-Object -ComObject WScript.Shell
+
+# Delete any existing broken shortcut
+if (Test-Path -Path $shortcutPath)
+{
+    <#
+    # Load the existing shortcut to verify its TargetPath
+    $shortcutLink = $shell.CreateShortcut($shortcutPath)
+
+    if (-not (Test-CmdLineTarget -CmdLine $shortcutLink.TargetPath))
+    {
+        Remove-Item -Path $shortcutPath -Force
+        Write-Host "Invalid Windows shortcut deleted from $shortcutPath"
+    }
+    else
+    {
+        Write-Verbose "Existing valid Windows shortcut detected at $shortcutPath"
+        $existingValidShortcut = $true
+    }
+    #>
+    Write-Verbose "Existing Windows shortcut detected at $shortcutPath"
+    $existingValidShortcut = $true
+}
+
+if (-not $existingValidShortcut)
+{
+    $shortcutLink = $shell.CreateShortcut($shortcutPath)
+    $shortcutLink.TargetPath = $fullScriptPath      # any command line args on the end?
+    $shortcutLink.WorkingDirectory = $scriptFolder
+    $shortcutLink.IconLocation = $pauseIconPath
+    $shortcutLink.Save()
+
+    Write-Host "Windows shortcut created at $shortcutPath"
+}
+
+# Clean up the COM object
+[System.Runtime.Interopservices.Marshal]::ReleaseComObject($shell) | Out-Null
+$shell = $null
+
 
 # read YAML config file
 Enable-Module -Name "powershell-yaml"
@@ -974,6 +1073,7 @@ if ($config.showNotifications)
     Enable-Module -Name "BurntToast"
 }
 
+
 # change window appearance
 #$Host.UI.RawUI.BackgroundColor = 'Black'
 #$Host.UI.RawUI.ForegroundColor = 'White'
@@ -989,7 +1089,7 @@ if ($WhatIf)
 {
     Write-Host "Dry Run Enabled!  No suspending, resuming, or minimising will occur" -ForegroundColor Red
 }
-Write-Verbose "scriptPath: $scriptPath"
+Write-Verbose "scriptPath: $scriptFolder"
 Write-Verbose "TriggerProcessPollInterval: $TriggerProcessPollInterval"
 Write-Host ""
 
