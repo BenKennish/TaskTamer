@@ -23,7 +23,7 @@ else
 
 # compile
 Write-Output "Compiling..."
-Invoke-PS2EXE -InputFile "AutoSuspender.ps1" -OutputFile "AutoSuspender.exe" -IconFile "images\pause.ico"
+Invoke-PS2EXE -InputFile "AutoSuspender.ps1" -OutputFile "AutoSuspender.exe" -IconFile "images\pause.ico" -Verbose -description "Whenever chosen 'trigger' processes (e.g. video games) are running, AutoSuspender automatically suspends chosen 'target' processes (e.g. web browsers, instant messaging apps, and game launchers), and automatically resumes them when the trigger process ends."  -title "AutoSuspender"
 
 
 if (-not ($compilerAlreadyInstalled))

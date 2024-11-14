@@ -7,7 +7,8 @@
 
 # ----------- TODO list --------------
 # TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
-#       note: very likely to suspend things that will cause problems tho
+#       (running as the user, won't include SYSTEM processes)
+#       NOTE: very likely to suspend things that will cause problems tho
 #
 # TODO: if user gives focus to any suspended process (before game has been closed), resume it temporarily.
 #       this gets quite complicated to do in a way that doesn't potentially increase load on the system
@@ -47,7 +48,7 @@ param (
     [int]$TriggerProcessPollInterval = 0
 )
 
-$Version = '0.9.3'
+$Version = '0.9.4'
 
 Set-StrictMode -Version Latest   # stricter rules = cleaner code  :)
 
@@ -263,9 +264,6 @@ public class ProcessManager
 
 "@
 
-# Add C# code to the PowerShell session
-#Add-Type -TypeDefinition $code 
-
 
 # Helper function to import a module, installing it first if necessary
 # -----------------------------------------------------------------------------
@@ -384,18 +382,26 @@ function Get-BytesColour
         return $BadColour
     }
 
-    # 1st element : what colour to use for Bytes
-    # 2nd element : what colour to use for KBs
-    # etc  
-    #              B        KB      MB       GB        TB         PB
-    $colours = @("Gray", "White", "Cyan", "Green", "Magenta", "Magenta")
+    $colours = @("Gray", "White", "Cyan", "Green", "Magenta")
     $unitIndex = 0
 
-    while ([Math]::Abs($Bytes) -ge 1024 -and $unitIndex -lt $colours.Length - 1)
+    if ([Math]::Abs($bytes) -ge 1024 * 1024)  # >= 1MB
     {
-        $Bytes /= 1024
         $unitIndex++
     }
+    if ([Math]::Abs($bytes) -ge 10 * 1024 * 1024) # >= 10MB
+    {
+        $unitIndex++
+    }
+    if ([Math]::Abs($bytes) -ge 100 * 1024 * 1024) # >= 100MB
+    {
+        $unitIndex++
+    }
+    if ([Math]::Abs($bytes) -ge 1024 * 1024 * 1024) # >= 1GB
+    {
+        $unitIndex++
+    }
+
     return $colours[$unitIndex]
 
 }
@@ -438,12 +444,6 @@ function Set-TargetProcessesState
     # using Write-Host not Write-Output as this function can be called while
     # the script is terminating and then has no access to Write-Output pipeline
 
-    if ($Suspend)
-    {
-        # create a lock file to indicate if a script terminated before it could resume processes
-        $PID | Out-File -FilePath $lockFilePath -Force
-    }
-
     if ($NoDeltas)
     {
         Write-Host ($tableFormat -f "NAME", "PID", "RAM", "", "") -ForegroundColor Yellow
@@ -466,7 +466,7 @@ function Set-TargetProcessesState
         #        $proc.MainWindowHandle
         # see also: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process?view=net-8.0
 
-        $proc.Refresh()  # refresh the memory stats for the process
+        $proc.Refresh()  # refresh the stats for the process
 
         # ignore processes that aren't running anymore
         if ($proc.HasExited)
@@ -477,27 +477,20 @@ function Set-TargetProcessesState
 
         if ($Launcher -and ($proc.Name -eq $Launcher))
         {
+
             Write-Verbose "$($proc.Name) ignored as it is the launcher for the trigger process"
             
             Write-Host ($tableFormat -f
                 $proc.Name,
                 $proc.Id,
                 (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64),
-                "",
-                "<Ignoring Launcher>"
+                "n/a",
+                "<Ignoring Launcher: $($launchers[$Launcher.ToLower()])>"
             ) -ForegroundColor DarkGray
             
             # skip over this process, no stats stuff
             continue
         }
-
-        # TODO: actually display this table using the Format-Table cmdlet like this...
-        <#
-        Get-Process | Format-Table @{ Label = "PID"; Expression={$_.Id}}, @{ Label = "Name"; Expression={$_.Name}},
-        @{ Label = "RAM"; Expression={
-            if ($_.WS -gt 100MB) { Write-Host -ForegroundColor Red $_.WS } else { $_.WS }
-        }}
-        #>      
 
         $totalRamUsage += $proc.WorkingSet64
 
@@ -662,7 +655,7 @@ function Reset-Environment
     {
         try
         {
-            Remove-Item -Path $lockFilePath -Force -ErrorAction Stop
+            Remove-Item -Path $lockFilePath -Force -ErrorAction Continue
         }
         catch
         {
@@ -672,6 +665,7 @@ function Reset-Environment
     }
 
     Write-Host "[Goodbye] o/"
+    Start-Sleep -Milliseconds 500
 }
 
 
@@ -706,7 +700,8 @@ function Write-RainbowText
 
 # Search back through a process's parents (and older ancestor processes) 
 # for a recognised launcher
-# returns the process name of the launcher (e.g. Steam, EpicGamesLauncher) else null
+# returns the process name of the launcher that's running 
+# (e.g. Steam, EpicGamesLauncher) else null
 # -----------------------------------------------------------------------------
 function Find-Launcher
 {
@@ -793,22 +788,24 @@ It can also keep track of the trigger processes memory usage using the
 Command line arguments
 ----------------------
 
-`-WhatIf` : Enables "what if" mode; the script doesn't actually suspend or
+`-WhatIf` : Enables "what if" mode; AutoSuspender doesn't actually suspend or
 resume any processes or minimise windows but does everything else. Useful for
 testing and measuring performance benefits of using AutoSuspender.
 
 `-ResumeAll` : Resumes all target processes then run as normal. Handy for when
-a previous invocation of the script failed to resume everything for some reason.
+a previous invocation of AutoSuspender failed to resume everything for some reason.
 
 `-CheckOnce` : Checks for trigger processes only once, exiting immediately if
 none are running. If one is running, performs usual operations then exits when
 the trigger process exits (after resuming the target processes). You might use
-this if you arrange for the script to run every time Windows runs a new process.
+this if you arrange for AutoSuspender to run every time Windows runs a new process.
 
 `-TriggerProcessPollInterval #` : if `#` is a positive integer, AutoSuspender
-will poll the memory usage of the trigger process every `#` seconds. This can
-be useful for gathering bencmarking data but can have a small performance
-impact so is disabled by default.
+will poll the status of the trigger process every `#` seconds, rather than waiting 
+to be told by Windows when it has stopped.  This method enables checking memory usage
+which can be useful for gathering bencmarking data, but it can have a small performance
+impact so is disabled by default.  Using this method it can take up to # seconds for 
+AutoSuspender to notice when a trigger process has closed.
 
 `-TrimWorkingSet` : Trim the working set of all target processes immediately
 after they are suspended.
@@ -816,9 +813,9 @@ after they are suspended.
 `-Help` : Displays short description of AutoSuspender and a list of possible
 command line arguments.
 
-`-Verbose` : The script will be more talkative about what's going on.
+`-Verbose` : AutoSuspender will be more talkative about what's going on.
 
-`-Debug` : Enables debugging mode, making the script a lot more verbose.
+`-Debug` : Enables debugging mode, making AutoSuspender a lot more verbose.
 
 "@
 
@@ -890,86 +887,6 @@ function Wait-ForKeyPress
 }
 
 
-# =============================================================================
-# =============================================================================
-
-# this prevents issues with external PS code when this script is compiled to a .exe:
-Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-
-# Define cleanup actions.  NB: does not work if terminal window is closed
-$cleanupAction = {
-    Write-Output "Cleaning up before exit..."
-    Reset-Environment
-    # ensures the script does indeed stop
-    # optional, but if we are cleaning up, we probably want to insist on closure
-    Stop-Process -Id $PID
-}
-
-# Register the AppDomain's ProcessExit event for general script termination
-[System.AppDomain]::CurrentDomain.add_ProcessExit({
-        Write-Host "ProcessExit() triggered"
-        & $cleanupAction
-    })
-
-# Register for Ctrl+C handling, see also 'ConsoleBreak'
-$null = Register-EngineEvent -SourceIdentifier ConsoleCancelEventHandler -Action {
-    Write-Host "Ctrl+C detected"
-    & $cleanupAction
-}
-
-
-if ($Help)
-{
-    Write-Usage
-    exit 0
-}
-
-# Check if any unexpected arguments were provided
-# (they get leftover within $args)
-if ($args.Count -gt 0)
-{
-    Write-Error "Unexpected argument(s): $($args -join ', ')"
-    #TODO: see if we get past this line when ErrorActionPreference is set to Stop
-    Write-Usage
-    exit 1
-}
-
-
-
-# a hash table used to map process PIDs to RAM (bytes) usages
-# used to save RAM usage of target processes just before they are suspended
-$pidRamUsages = @{}
-
-# Formatting string for the table printed upon suspending/resuming target processes
-# Process, PID, RAM, deltaRAM, Notes
-$tableFormat = "{0,-17} {1,-6} {2,10} {3,11} {4,-10}"
-# TODO: maybe the alignment number of the Process name could depend on the maximum running process name length?
-
-# Define the full path to the icon files using
-# the path of the folder where the script is located
-if ($MyInvocation.MyCommand.Path)
-{
-    $fullScriptPath = $MyInvocation.MyCommand.Path
-    $scriptFolder = Split-Path -Parent $fullScriptPath
-}
-else
-{
-    # We are likely a compiled executable so we need to get the path like this:
-    $fullScriptPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-    $scriptFolder = [System.IO.Path]::GetDirectoryName($fullScriptPath)
-    # TODO test this!
-}
-
-$lockFilePath = Join-Path -Path $scriptFolder -ChildPath "/lock.pid"
-$configPath = Join-Path -Path $scriptFolder -ChildPath "/config.yaml"
-$templatePath = Join-Path -Path $scriptFolder -ChildPath "/config-template.yaml"
-$pauseIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/pause.ico"
-$playIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/play.ico"
-
-# Define the shortcut path (same folder and filename as the script, but with a .lnk extension)
-$shortcutPath = Join-Path -Path $scriptFolder -ChildPath "$([System.IO.Path]::GetFileNameWithoutExtension($fullScriptPath)).lnk"
-
-
 # Function to validate if a TargetPath (e.g. within a Windows Shortcut) has an existing target file
 # the Target Path might have quotation marks around and spaces within the first argument
 # and might include additional command line arguments
@@ -1009,6 +926,94 @@ function Test-CmdLineTarget
 }
 
 
+# =============================================================================
+# =============================================================================
+# =============================================================================
+# =============================================================================
+# =============================================================================
+# =============================================================================
+# =============================================================================
+# =============================================================================
+# =============================================================================
+# =============================================================================
+
+
+# this prevents issues with external PS code when this script is compiled to a .exe:
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+
+
+# Define cleanup actions.  NB: cannot seem to get this to execute if terminal window is closed
+$cleanupAction = {
+    Write-Output "Cleaning up..."
+    Reset-Environment
+
+    # not sure whether this is strictly necessary
+    Unregister-Event -SourceIdentifier PowerShell.Exiting -ErrorAction Continue
+
+    # ensures the script does indeed stop now
+    # optional, but if we are cleaning up, we probably want to insist on closure
+    Stop-Process -Id $PID
+}
+
+$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
+    Write-Host "PowerShell is exiting (PowerShell.Exiting)..."
+    & $cleanupAction
+}
+
+
+if ($Help)
+{
+    Write-Usage
+    exit 0
+}
+
+# Check if any unexpected arguments were provided
+# (they get leftover within $args)
+if ($args.Count -gt 0)
+{
+    Write-Error "Unexpected argument(s): $($args -join ', ')" -ErrorAction Continue
+    Write-Usage
+    exit 1
+}
+
+
+# a hash table used to map process PIDs to RAM (bytes) usages
+# used to save RAM usage of target processes just before they are suspended
+$pidRamUsages = @{}
+
+# Formatting string for the table printed upon suspending/resuming target processes
+# Process, PID, RAM, deltaRAM, Notes
+$tableFormat = "{0,-17} {1,-6} {2,10} {3,11} {4,-10}"
+
+# Define the full path to the icon files using
+# the path of the folder where the script is located
+if (-not ([System.AppDomain]::CurrentDomain.FriendlyName -like "*.exe"))
+{
+    Write-Verbose "Running interpreted"
+    # we cannot use $MyInvocation.MyCommand.Path as MyCommand is a string
+    $fullScriptPath = $MyInvocation.MyCommand.Path
+    $scriptFolder = Split-Path -Parent $fullScriptPath
+}
+else
+{
+    Write-Verbose "Running compiled"
+    # if we try to use this when running interpreted, the paths are for powershell.exe
+    # rather than the script
+
+    # We are likely a compiled executable so we need to get the path like this:
+    $fullScriptPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $scriptFolder = [System.IO.Path]::GetDirectoryName($fullScriptPath)
+}
+
+$lockFilePath = Join-Path -Path $scriptFolder -ChildPath "/lock.pid"
+$configPath = Join-Path -Path $scriptFolder -ChildPath "/config.yaml"
+$templatePath = Join-Path -Path $scriptFolder -ChildPath "/config-template.yaml"
+$pauseIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/pause.ico"
+$playIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/play.ico"
+$shortcutPath = Join-Path -Path $scriptFolder -ChildPath "$([System.IO.Path]::GetFileNameWithoutExtension($fullScriptPath)).lnk"
+
+$myDocumentsPath = [System.Environment]::GetFolderPath('MyDocuments')
+
 $existingValidShortcut = $false
 $shell = New-Object -ComObject WScript.Shell
 
@@ -1037,7 +1042,7 @@ if (Test-Path -Path $shortcutPath)
 if (-not $existingValidShortcut)
 {
     $shortcutLink = $shell.CreateShortcut($shortcutPath)
-    $shortcutLink.TargetPath = $fullScriptPath      # any command line args on the end?
+    $shortcutLink.TargetPath = $fullScriptPath #"powershell -ExecutionPolicy Bypass -File $fullScriptPath"  # any command line args on the end?
     $shortcutLink.WorkingDirectory = $scriptFolder
     $shortcutLink.IconLocation = $pauseIconPath
     $shortcutLink.Save()
@@ -1045,7 +1050,7 @@ if (-not $existingValidShortcut)
     Write-Host "Windows shortcut created at $shortcutPath"
 }
 
-# Clean up the COM object
+# Clean up the Shell COM object
 [System.Runtime.Interopservices.Marshal]::ReleaseComObject($shell) | Out-Null
 $shell = $null
 
@@ -1067,35 +1072,28 @@ if (-not (Test-Path -Path $configPath))
 }
 
 $config = Get-Content -Path $configPath -Raw | ConvertFrom-Yaml
-
 if ($config.showNotifications)
 {
     Enable-Module -Name "BurntToast"
 }
 
-
-# change window appearance
-#$Host.UI.RawUI.BackgroundColor = 'Black'
-#$Host.UI.RawUI.ForegroundColor = 'White'
-#Clear-Host  # Clear the console to apply the new colors
-
-Write-Host "/===============\"
-Write-Host -NoNewline "| "
+Write-Host "/===============\" -ForegroundColor Magenta
+Write-Host -NoNewline "| " -ForegroundColor Magenta
 Write-RainbowText "AutoSuspender"
-Write-Host " |"
-Write-Host "\===============/"
+Write-Host " |" -ForegroundColor Magenta
+Write-Host "\===============/" -ForegroundColor Magenta
 Write-Host "Running v$Version"
 if ($WhatIf)
 {
-    Write-Host "Dry Run Enabled!  No suspending, resuming, or minimising will occur" -ForegroundColor Red
+    Write-Host "ATTENTION: 'What If' mode enabled!  No suspending, resuming, or minimising will occur" -ForegroundColor Red
 }
 Write-Verbose "scriptPath: $scriptFolder"
 Write-Verbose "TriggerProcessPollInterval: $TriggerProcessPollInterval"
 Write-Host ""
 
-# TODO: print tables using Format-Table like this:
-# Get-Process | Sort-Object -Property BasePriority | Format-Table -GroupBy BasePriority -Wrap
-#
+# we can print tables using Format-Table like this:
+#   Get-Process | Sort-Object -Property BasePriority | Format-Table -GroupBy BasePriority -Wrap
+# but we then cannot use colour or custom formatting unless using ANSI color codes in PS 7
 
 if ($TriggerProcessPollInterval -lt 0)
 {
@@ -1108,26 +1106,29 @@ if (Test-Path -Path $lockFilePath)
     $pidInLockFile = Get-Content -Path $lockFilePath
     Write-Verbose "Lock file exists and contains '$($pidInLockFile)'"
 
-    if (-not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue))
+    if ($pidInLockFile -and -not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue))
     {
-        Write-Output "Lock file exists and is stale.  Resuming all processes..."
+        Write-Output "Previous AutoSuspender didn't close properly.  Assuming crash and resuming all processes..."
         Set-TargetProcessesState -Resume -NoDeltas
+        $ResumeAll = $false
         Remove-Item -Path $lockFilePath -Force
     }
+    else 
+    {
+        Write-Output "AutoSuspender is already running."
+        Write-Output "Exiting..."
+        exit 0
+    }
 }
-elseif ($ResumeAll)
-{
-    #NB: if lock file does exist and points to an active process, 
-    # we will NOT reach here, even if -ResumeAll is passed
 
+if ($ResumeAll)
+{
     Write-Output "Resuming all processes ('-ResumeAll')..."
     Set-TargetProcessesState -Resume -NoDeltas
 }
 
-
-# e.g. use -CheckOnce if the script will be run whenever a new process is ran on the system
-# (probably run it invisibly or at least minimised so a terminal windows doesnt keep appearing)
-
+# create lockfile with out PID in
+$PID | Out-File -FilePath $lockFilePath -Force
 
 # Are there some processes that we suspended and have yet to resume?
 $suspendedProcesses = $false
@@ -1177,7 +1178,7 @@ try
                 if ($launcher)
                 {
                     Write-Output "**** Detected running using launcher '$launcher' ($($launchers[$launcher]))"
-                    #TODO: insert launcher specific configuration/optimisation here
+                    #TODO: insert launcher specific configuration/optimisation here?
                 }
             }
 
@@ -1185,7 +1186,7 @@ try
             {
                 Write-Host "Setting AutoSuspender to a lower priority"
                 $scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
-                # ProcessPriorityClass]::Idle is Task Manager's "Low"
+                # ProcessPriorityClass]::Idle is what Task Manager calls "Low"
             }
 
             # Minimise windows of all target processes
@@ -1230,6 +1231,8 @@ try
                 $peakWorkingSet = 0
                 $peakPagedMemorySize = 0
 
+                # TODO: could TriggerProcessPollInterval run in a separate thread so we just poll for memory usage but 
+                # still use .WaitForExit ?
                 if ($TriggerProcessPollInterval -gt 0)
                 {
                     while (!$runningTriggerProcess.HasExited)
@@ -1238,19 +1241,19 @@ try
                         $peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
                         $peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
 
-                        Write-Verbose "$($runningTriggerProcess.Name) current peak working set: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakWorkingSet64)"
-                        Write-Verbose "$($runningTriggerProcess.Name) current peak paged memory: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
+                        Write-Verbose "$($runningTriggerProcess.Name) Peak WS: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakWorkingSet64)"
+                        Write-Verbose "$($runningTriggerProcess.Name) Peak Paged: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
                         Start-Sleep -Seconds $TriggerProcessPollInterval
                     }
                     Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) exited"
-                    Write-Host "$($runningTriggerProcess.Name) peak working set: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
-                    Write-Host "$($runningTriggerProcess.Name) peak paged memory: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
+                    Write-Host "$($runningTriggerProcess.Name) Peak WS: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
+                    Write-Host "$($runningTriggerProcess.Name) Peak Paged: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
                 }
                 else
                 {
-                    $runningTriggerProcess.WaitForExit()   # blocking
+                    $runningTriggerProcess.WaitForExit()
 
-                    # these figures are unreliable once the process has exited
+                    # these figures are just too unreliable once the process has exited
                     # as Windows clears the stats for terminated processes
                     #$peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
                     #$peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
@@ -1265,12 +1268,40 @@ try
             }
 
             Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** All trigger processes have exited"
-           
+                       
             if ($config.lowPriorityWaiting)
             {
                 Write-Host "Restoring AutoSuspender priority class"
                 $scriptProcess.PriorityClass = $scriptProcessPreviousPriority
             }
+
+            # Overwatch config patch
+            # ---------------------------------------------------------------------------------------------------
+            if ($config.PSObject.Properties['overwatch2ConfigPatch'] -and $config.overwatch2ConfigPatch -and $runningTriggerProcess.Name -eq "Overwatch")
+            {
+                # wait for it to release lock on the file
+                Start-Sleep -Milliseconds 250
+
+                try
+                {
+                    $ow2ConfigFile = Join-Path -Path $myDocumentsPath -ChildPath "\Overwatch\Settings\Settings_v0.ini"
+                    $contents = Get-Content -Path $ow2ConfigFile -Raw
+
+                    $newContents = $contents -replace '(?m)^BroadcastMarginLeft\s*=.*$', 'BroadcastMarginLeft = "1.000000"'
+                    if ($contents -ne $newContents)
+                    {
+                        Write-Host "**** Patching $ow2ConfigFile to fix 'BroadcastMarginLeft'..."
+                        Set-Content -Path $configFile -Value $newContents -Encoding UTF8
+                    }
+                }
+                catch 
+                {
+                    Write-Host "Error: $($_.Exception.Message)"
+                    Write-Host "At line: $($_.InvocationInfo.ScriptLineNumber) in $($_.InvocationInfo.ScriptName)"
+                    Write-Host $_.InvocationInfo.Line
+                }
+            }
+            # ---------------------------------------------------------------------------------------------------
 
             if ($config.showNotifications)
             {
@@ -1286,7 +1317,6 @@ try
 
             Set-TargetProcessesState -Resume -Launcher $launcher
             $suspendedProcesses = $false
-            Remove-Item -Path $lockFilePath -Force -ErrorAction Continue
 
             if ($CheckOnce)
             {
@@ -1312,18 +1342,11 @@ try
             break  #while
         }
     }
+
 }
 catch
 {
-    #Write-Error "ERROR: $_"
-    Write-Error "ERROR: $($_.Exception.Message) (Line: $($_.InvocationInfo.ScriptLineNumber))"
+    Write-Error "ERROR: $_"
     Write-Host "Press Enter to exit."
     Read-Host
-}
-finally
-{
-    Write-Host "Finally..."
-    Reset-Environment
-    Unregister-Event -SourceIdentifier ConsoleCancelEventHandler
-    Start-Sleep -Seconds 1
 }
