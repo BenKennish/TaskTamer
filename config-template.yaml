@@ -39,3 +39,10 @@ showNotifications: true
 # should AutoSuspender set itself to a low CPU priority when waiting for trigger
 # processes to close?  true/false
 lowPriorityWaiting: false
+
+# only show the subtotals for groups of processes with the same name?
+showTargetProcessSubtotalsOnly: true
+
+# patch Overwatch 2 config file to set BroadcastMarginLeft to 1.0000
+# probably you don't want this unless you are Ben
+overwatch2ConfigPatch: false

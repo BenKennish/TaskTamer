@@ -16,6 +16,9 @@
 #       OR perhaps just detect when a game loses focus and then unsuspend everything and resuspend them when it gains focus again
 #       OR they could just manually ctrl-C the script and then run it again before restoring the game app
 #
+# TODO: if user presses a certain key while it's waiting for a trigger process, we could temporarily resume the target processes
+#       and then suspend them again when they press the key again (or they give focus to the trigger process)
+#
 # TODO: allow setting CPU priority to Low for certain processes using $proc.PriorityClass property
 #       (and restore previous priority when the trigger process closes) rather than suspending them
 #
@@ -47,8 +50,11 @@ param (
     [switch]$Debug,
     [switch]$Verbose,
     [switch]$TrimWorkingSet,
-    [int]$TriggerProcessPollInterval = 0
+    [switch]$GetTriggerProcessStats
 )
+
+# everyone loves UTF-8, right?
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $Version = '0.10.1'
 
@@ -525,30 +531,69 @@ function Write-Subtotal
         [Parameter(Mandatory = $true)] [string]$LastProcessName,
         [Parameter(Mandatory = $true)] [int64]$SameProcessRamTotal,
         [Nullable[int64]]$SameProcessRamDeltaTotal = $null,
-        [string]$ForegroundColor = "Yellow"
+        [string]$ForegroundColor = "",
+        [switch]$Launcher
     )
 
-    if ($SameProcessCount -gt 1)
+    if ($ForegroundColor -eq "")
     {
-        # only show subtotal when there is 2+ processes
-        if ($SameProcessRamDeltaTotal -ne $null)
+        if ($showTargetProcessSubtotalsOnly)
         {
-            $row = @(
-                [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "$LastProcessName" },
-                [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "+++++" },
-                [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
-                [PSCustomObject] @{ ForegroundColor = (Get-BytesColour -Bytes $SameProcessRamDeltaTotal -NegativeIsPositive); Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamDeltaTotal) },
-                [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "" }
-            )
+            $ForegroundColor = "Gray"
+        }
+        else 
+        {
+            $ForegroundColor = "Yellow"
+        }  
+    }
+
+    if ($SameProcessCount -gt 1 -or $showTargetProcessSubtotalsOnly)
+    {
+        # only show subtotal when there is 2+ processes or if we are only showing subtotals (so we want to show the 'subtotal' for 1 process too)
+        if ($null -ne $SameProcessRamDeltaTotal)
+        {
+            if ($Launcher)
+            {
+                $row = @(
+                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = $LastProcessName },
+                    [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "TOTAL:" },
+                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
+                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamDeltaTotal -DisplayPlus) },
+                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignored Launcher: $($launchers[$LastProcessName])>" }
+                )
+            }
+            else
+            {
+                $row = @(
+                    [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = $LastProcessName },
+                    [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "TOTAL:" },
+                    [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
+                    [PSCustomObject] @{ ForegroundColor = (Get-BytesColour -Bytes $SameProcessRamDeltaTotal -NegativeIsPositive); Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamDeltaTotal -DisplayPlus) },
+                    [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "" }
+                )
+            }
         }
         else
         {
-            $row = @(
-                [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "$LastProcessName" },
-                [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "+++++" },
-                [PSCustomObject] @{ ForegroundColor = (Get-BytesColour -Bytes $SameProcessRamTotal); Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
-                [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "" }
-            )
+            if ($Launcher)
+            {
+                # this may not get hit at all anymore as we are excluding launchers from display in the table
+                $row = @(
+                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = $LastProcessName },
+                    [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "TOTAL:" },
+                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
+                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignored Launcher: $($launchers[$LastProcessName])>" }
+                )
+            }
+            else 
+            {
+                $row = @(
+                    [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = $LastProcessName },
+                    [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "TOTAL:" },
+                    [PSCustomObject] @{ ForegroundColor = (Get-BytesColour -Bytes $SameProcessRamTotal); Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
+                    [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "" }
+                )            
+            }
         }
         Write-Output -NoEnumerate $row
     }
@@ -559,17 +604,16 @@ function Get-BytesColour
 {
     param (
         [Parameter(Mandatory = $true)] [int64]$Bytes,
-        [switch]$NegativeIsPositive, # if set, the more negative a number is, the better it is.
-        [string]$BadColour = "Red"   # what colour to use if the number is "bad"
+        [switch]$NegativeIsPositive # if set, the more negative a number is, the better it is.
     )
 
     if ($NegativeIsPositive -and $Bytes -gt 0)
     {
-        return $BadColour
+        return "Red"
     }
     if (-not $NegativeIsPositive -and $Bytes -lt 0)
     {
-        return $BadColour
+        return "Red"
     }
 
     $colours = @("DarkGray", "Gray", "Cyan", "Green", "Magenta")
@@ -665,25 +709,37 @@ function Set-TargetProcessesState
             $pidRamUsagesPreSuspension[$proc.Id] = $proc.WorkingSet64
         }
 
+        # ignore launcher processes completely when resuming
+        if ($Resume -and $proc.Name -eq $Launcher)
+        {
+            continue
+        }
+
         # if this process has a different name to the last one
         if ($proc.Name -ne $lastProcessName)
         {
             if ($lastProcessName -ne "")   # if this isn't the very first process
             {
                 # display subtotal for the previous group of processes with the same name
-                $foregroundColor = "Yellow"
-                if ($proc.Name -eq $Launcher)
+                if ($lastProcessName -eq $Launcher)
                 {
-                    $foregroundColor = "DarkGray"
+                    Write-Subtotal `
+                        -SameProcessCount $sameProcessCount `
+                        -LastProcessName $lastProcessName `
+                        -SameProcessRamTotal $sameProcessRamTotal `
+                        -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
+                        -ForegroundColor "DarkGray" `
+                        -Launcher
                 }
-               
-                Write-Subtotal `
-                    -SameProcessCount $sameProcessCount `
-                    -LastProcessName $lastProcessName `
-                    -SameProcessRamTotal $sameProcessRamTotal `
-                    -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
-                    -ForegroundColor $foregroundColor
-                # sameProcessRamDeltaTotal will be $null if untracked
+                else
+                {
+                    Write-Subtotal `
+                        -SameProcessCount $sameProcessCount `
+                        -LastProcessName $lastProcessName `
+                        -SameProcessRamTotal $sameProcessRamTotal `
+                        -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal
+                }
+
             }
 
             # store info on this new process name group
@@ -733,7 +789,10 @@ function Set-TargetProcessesState
                 )
             }
 
-            Write-Output -NoEnumerate $row
+            if (-not $showTargetProcessSubtotalsOnly)
+            {
+                Write-Output -NoEnumerate $row
+            }
             continue # to next process
         }
 
@@ -750,7 +809,7 @@ function Set-TargetProcessesState
         }
 
         if ($NoDeltas)
-        {
+        {            
             $row = @(                    
                 [PSCustomObject] @{ Data = $proc.Name },
                 [PSCustomObject] @{ Data = $proc.Id },
@@ -768,7 +827,10 @@ function Set-TargetProcessesState
                 [PSCustomObject] @{ Data = $windowTitle }
             )
         }
-        Write-Output -NoEnumerate $row      
+        if (-not $showTargetProcessSubtotalsOnly)
+        {
+            Write-Output -NoEnumerate $row
+        }
 
         if (!$WhatIf)
         {
@@ -809,20 +871,25 @@ function Set-TargetProcessesState
         $lastProcessName = $proc.name
     }
 
-    # write (potential) subtotal row for the last process group
-
-    $foregroundColor = "Yellow"
+    # write subtotal row for the last process group (if there were >1 processes)
     if ($proc.Name -eq $Launcher)
     {
-        $foregroundColor = "DarkGray"
+        Write-Subtotal `
+            -SameProcessCount $sameProcessCount `
+            -LastProcessName $lastProcessName `
+            -SameProcessRamTotal $sameProcessRamTotal `
+            -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
+            -ForegroundColor "DarkGray" `
+            -Launcher
     }
-
-    Write-Subtotal `
-        -SameProcessCount $sameProcessCount `
-        -LastProcessName $lastProcessName `
-        -SameProcessRamTotal $sameProcessRamTotal `
-        -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
-        -ForegroundColor $foregroundColor
+    else
+    {
+        Write-Subtotal `
+            -SameProcessCount $sameProcessCount `
+            -LastProcessName $lastProcessName `
+            -SameProcessRamTotal $sameProcessRamTotal `
+            -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal
+    }
 
     # write final total row
     if (-not $NoDeltas)
@@ -858,7 +925,7 @@ function Reset-Environment
     # Write-Output and Write-Error are not available when application is
     # shutting down
 
-    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Shutting down..."
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] AutoSuspender is shutting down..."
 
     if ($suspendedProcesses)
     {
@@ -879,7 +946,7 @@ function Reset-Environment
         }
     }
 
-    Write-Host "[Goodbye] o/"
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] (Goodbye)> o/"
     Start-Sleep -Milliseconds 500
 }
 
@@ -1003,34 +1070,29 @@ It can also keep track of the trigger processes memory usage using the
 Command line arguments
 ----------------------
 
-`-WhatIf` : Enables "what if" mode; AutoSuspender doesn't actually suspend or
-resume any processes or minimise windows but does everything else. Useful for
-testing and measuring performance benefits of using AutoSuspender.
+-WhatIf
+    Enables "what if" mode; AutoSuspender doesn't actually suspend or resume any processes or minimise windows but does everything else. Useful for testing and measuring performance benefits of using AutoSuspender.
 
-`-ResumeAll` : Resumes all target processes then run as normal. Handy for when
-a previous invocation of AutoSuspender failed to resume everything for some reason.
+-ResumeAll
+    Resumes all target processes then run as normal. Handy for when a previous invocation of the script failed to resume everything for some reason.
 
-`-CheckOnce` : Checks for trigger processes only once, exiting immediately if
-none are running. If one is running, performs usual operations then exits when
-the trigger process exits (after resuming the target processes). You might use
-this if you arrange for AutoSuspender to run every time Windows runs a new process.
+-CheckOnce
+    Checks for trigger processes only once, exiting immediately if none are running. If one is running, performs usual operations then exits when the trigger process exits (after resuming the target processes). You might use this if you arrange for the script to run every time Windows runs a new process.
 
-`-TriggerProcessPollInterval #` : if `#` is a positive integer, AutoSuspender
-will poll the status of the trigger process every `#` seconds, rather than waiting 
-to be told by Windows when it has stopped.  This method enables checking memory usage
-which can be useful for gathering bencmarking data, but it can have a small performance
-impact so is disabled by default.  Using this method it can take up to # seconds for 
-AutoSuspender to notice when a trigger process has closed.
+-GetTriggerProcessStats
+    Poll the status of the trigger process, rather than waiting to be told by Windows when it has stopped.  This method enables checking memory usage which can be useful for gathering benchmarking data, but it can have a small performance impact so is disabled by default.
 
-`-TrimWorkingSet` : Trim the working set of all target processes immediately
-after they are suspended.
+-TrimWorkingSet
+    Trim the working set of all target processes immediately after they are suspended. Although this can free up a lot of RAM for the trigger process, the target processes will likely be considerably slower once resumed, regardless of whether the trigger process used or benefited from the RAM.
 
-`-Help` : Displays short description of AutoSuspender and a list of possible
-command line arguments.
+-Help
+    Displays a short description of AutoSuspender and a list of possible command line arguments
 
-`-Verbose` : AutoSuspender will be more talkative about what's going on.
+-Verbose
+    The script will be more talkative about what's going on.
 
-`-Debug` : Enables debugging mode, making AutoSuspender a lot more verbose.
+-Debug
+    Enables debugging mode, useful for anyone wishing to fix bugs in the script.
 
 "@
 
@@ -1094,7 +1156,7 @@ function Wait-ForKeyPress
             {
                 return $true
             }
-            Start-Sleep -Milliseconds 100  # polling interval 100ms
+            Start-Sleep -Milliseconds 200  # polling interval 200ms
         }
     }
     return $false
@@ -1156,16 +1218,14 @@ function Test-CmdLineTarget
 # this prevents issues with external PS code when this script is compiled to a .exe:
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 
-# everyone loves UTF-8, right?
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-
 # Define cleanup actions.  NB: cannot seem to get this to execute if terminal window is closed
 $cleanupAction = {
-    Write-Output "Cleaning up..."
-    Reset-Environment
-
+    Write-Verbose "Cleaning up..."
+    
     # not sure whether this is strictly necessary
     Unregister-Event -SourceIdentifier PowerShell.Exiting -ErrorAction Continue
+
+    Reset-Environment
 
     # ensures the script does indeed stop now
     # optional, but if we are cleaning up, we probably want to insist on closure
@@ -1173,7 +1233,7 @@ $cleanupAction = {
 }
 
 $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
-    Write-Host "PowerShell is exiting (PowerShell.Exiting)..."
+    Write-Verbose "[PowerShell.Exiting] event triggered"
     & $cleanupAction
 }
 
@@ -1284,9 +1344,26 @@ if (-not (Test-Path -Path $configPath))
 }
 
 $config = Get-Content -Path $configPath -Raw | ConvertFrom-Yaml
-if ($config.showNotifications)
+
+if ($config -isnot [Hashtable])
+{
+    Write-Error "Config YAML file conversion created $($config.GetType().Name), expected Hashtable"
+    exit 1
+}
+
+Write-Verbose '-------- $config: --------'
+Write-Verbose ($config | Format-List | Out-String)
+#Write-Verbose (Out-String -InputObject $config)
+
+if ($config['showNotifications'])
 {
     Enable-Module -Name "BurntToast"
+}
+
+$showTargetProcessSubtotalsOnly = $false
+if ($config['showTargetProcessSubtotalsOnly'])
+{
+    $showTargetProcessSubtotalsOnly = $true
 }
 
 # Draw the pretty name box
@@ -1305,18 +1382,12 @@ if ($WhatIf)
     Write-Host "ATTENTION: 'What If' mode enabled!  No suspending, resuming, or minimising will occur" -ForegroundColor Red
 }
 Write-Verbose "scriptPath: $scriptFolder"
-Write-Verbose "TriggerProcessPollInterval: $TriggerProcessPollInterval"
+Write-Verbose "GetTriggerProcessStats: $GetTriggerProcessStats"
 Write-Host ""
 
 # we can print tables using Format-Table like this:
 #   Get-Process | Sort-Object -Property BasePriority | Format-Table -GroupBy BasePriority -Wrap
 # but we then cannot use colour or custom formatting unless using ANSI color codes (as featured in PS 7.1)
-
-if ($TriggerProcessPollInterval -lt 0)
-{
-    throw "PollInterval must be a positive integer number of seconds (or 0 to disable polling)"
-}
-
 
 if (Test-Path -Path $lockFilePath)
 {
@@ -1450,78 +1521,48 @@ while ($true)
         {
             Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for trigger process $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) to exit..."
 
-            $peakWorkingSet = 0
-            $peakPagedMemorySize = 0
-
-            # TODO: could TriggerProcessPollInterval run in a separate thread so we just poll for memory usage but 
-            # still use .WaitForExit ?
-            if ($TriggerProcessPollInterval -gt 0)
+            if ($GetTriggerProcessStats)
             {
+                $peakWorkingSet = 0
+                $peakPagedMemorySize = 0
+
                 while (!$runningTriggerProcess.HasExited)
                 {
                     $runningTriggerProcess.Refresh()
-                    $peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
-                    $peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
 
-                    Write-Verbose "$($runningTriggerProcess.Name) Peak WS: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakWorkingSet64)"
-                    Write-Verbose "$($runningTriggerProcess.Name) Peak Paged: $(ConvertTo-HumanReadable -Bytes $runningTriggerProcess.PeakPagedMemorySize64)"
-                    Start-Sleep -Seconds $TriggerProcessPollInterval
+                    # we use 'Max' just in case we end up running this just after the process has exited
+                    $peakWorkingSet = [Math]::Max($runningTriggerProcess.PeakWorkingSet64, $peakWorkingSet)
+                    $peakPagedMemorySize = [Math]::Max($runningTriggerProcess.PeakPagedMemorySize64, $peakPagedMemorySize)
+
+                    Write-Debug "$($runningTriggerProcess.Name) Peak WS: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
+                    Write-Debug "$($runningTriggerProcess.Name) Peak Paged: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
+                    
+                    Start-Sleep -Seconds 2  #hardcoded now
                 }
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) exited"
+                
                 Write-Host "$($runningTriggerProcess.Name) Peak WS: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
                 Write-Host "$($runningTriggerProcess.Name) Peak Paged: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
             }
             else
             {
                 $runningTriggerProcess.WaitForExit()
-
-                # these figures are just too unreliable once the process has exited
-                # as Windows clears the stats for terminated processes
-                #$peakWorkingSet = $runningTriggerProcess.PeakWorkingSet64
-                #$peakPagedMemorySize = $runningTriggerProcess.PeakPagedMemorySize64
-
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) Exited"
             }
 
+            Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) exited"
+
             # NOTE: we are waiting for each trigger process to exit individually.  so if there is more than one trigger
-            # processes running at once, we won't be checking the memory stats of them until untli the first process 
-            # exists, etc
+            # processes running at once, we won't be checking the memory stats of them until until the first process 
+            # exits, etc
         }
 
         Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** All trigger processes have exited"
-                       
+
         if ($config.lowPriorityWaiting)
         {
             Write-Host "Restoring AutoSuspender priority class"
             $scriptProcess.PriorityClass = $scriptProcessPreviousPriority
         }
 
-        # Overwatch config patch
-        # ---------------------------------------------------------------------------------------------------
-        if ($config.PSObject.Properties['overwatch2ConfigPatch'] -and $config.overwatch2ConfigPatch -and $runningTriggerProcess.Name -eq "Overwatch")
-        {
-            # wait for it to release lock on the file
-            Start-Sleep -Milliseconds 250
-
-            try
-            {
-                $ow2ConfigFile = Join-Path -Path $myDocumentsPath -ChildPath "\Overwatch\Settings\Settings_v0.ini"
-                $contents = Get-Content -Path $ow2ConfigFile -Raw
-
-                $newContents = $contents -replace '(?m)^BroadcastMarginLeft\s*=.*$', 'BroadcastMarginLeft = "1.000000"'
-                if ($contents -ne $newContents)
-                {
-                    Write-Host "**** Patching $ow2ConfigFile to fix 'BroadcastMarginLeft'..."
-                    Set-Content -Path $ow2ConfigFile -Value $newContents -Encoding UTF8
-                }
-            }
-            catch 
-            {
-                Write-Host "Error: $($_.Exception.Message)"
-                Write-Host "At line: $($_.InvocationInfo.ScriptLineNumber) in $($_.InvocationInfo.ScriptName)"
-                Write-Host $_.InvocationInfo.Line
-            }
-        }
         # ---------------------------------------------------------------------------------------------------
 
         if ($config.showNotifications)
@@ -1536,11 +1577,48 @@ while ($true)
         # which isn't very efficient.  However most people don't run multiple games at once so
         # this isn't a priority to fix
 
+        Write-Host "Resuming target processes..."
+
         $columnHeadings = @("NAME", "PID", "RAM", "CHANGE", "WINDOW")
         $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,11}", "{0,-10}")
         Set-TargetProcessesState -Resume -Launcher $launcher | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
 
         $suspendedProcesses = $false
+
+        # Overwatch config file patch for 'BroadcastMarginLeft'
+        # ---------------------------------------------------------------------------------------------------
+        if ($config['overwatch2ConfigPatch'] -and ($runningTriggerProcess.Name -eq "Overwatch"))
+        {           
+            try
+            {
+                $ow2ConfigFile = Join-Path -Path $myDocumentsPath -ChildPath "\Overwatch\Settings\Settings_v0.ini"
+                Write-Host "overwatch2ConfigPatch set. Examining $ow2ConfigFile ..."
+
+                # sleep to give extra time for OW2 to save and release lock on the file
+                Start-Sleep -Seconds 1
+
+                $contents = Get-Content -Path $ow2ConfigFile -Raw
+
+                $newContents = $contents -replace '(?m)^BroadcastMarginLeft\s*=.*$', 'BroadcastMarginLeft = "1.000000"'
+                if ($contents -ne $newContents)
+                {
+                    # FIXME: bug w.r.t. ShowIntro = "0" ended up on the ini file repeated times
+                    # but possibly it was caused by writing conflict between Overwatch and this script
+                    Write-Host "**** Patching $ow2ConfigFile to fix 'BroadcastMarginLeft'..."
+                    Set-Content -Path $ow2ConfigFile -Value $newContents -Encoding UTF8
+                }
+                else
+                {
+                    Write-Host "No patching required"
+                }
+            }
+            catch 
+            {
+                Write-Host "Error: $($_.Exception.Message)"
+                Write-Host "At line: $($_.InvocationInfo.ScriptLineNumber) in $($_.InvocationInfo.ScriptName)"
+                Write-Host $_.InvocationInfo.Line
+            }
+        }
 
         if ($CheckOnce)
         {
