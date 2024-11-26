@@ -16,7 +16,7 @@
 #       OR perhaps just detect when a game loses focus and then unsuspend everything and resuspend them when it gains focus again
 #       OR they could just manually ctrl-C the script and then run it again before restoring the game app
 #
-# TODO: if user presses a certain key while it's waiting for a trigger process, we could temporarily resume the target processes
+# TODO: if user presses a certain key while it's waiting for a trigger process to close, we could temporarily resume the target processes
 #       and then suspend them again when they press the key again (or they give focus to the trigger process)
 #
 # TODO: allow setting CPU priority to Low for certain processes using $proc.PriorityClass property
@@ -56,7 +56,7 @@ param (
 # everyone loves UTF-8, right?
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$Version = '0.10.1'
+$Version = '0.11.0'
 
 Set-StrictMode -Version Latest   # stricter rules = cleaner code  :)
 
@@ -656,7 +656,7 @@ function Set-TargetProcessesState
         [Parameter(ParameterSetName = 'Resume', Mandatory = $true)]
         [switch]$Resume,
         [Parameter(ParameterSetName = 'Resume')]
-        [switch]$NoDeltas        
+        [switch]$NoDeltas
     )
 
     $totalRamUsage = 0
@@ -684,7 +684,13 @@ function Set-TargetProcessesState
     # NB: for a -Resume, we don't look at suspendedProcesses array but just do another process scan
     # this might result in trying to resume new processes that weren't suspended (by us)
     # (probably doesn't matter but it's not very elegant)
-    foreach ($proc in Get-Process | Where-Object { $config.targetProcessNames -contains $_.Name })
+
+    $runningTargetProcesses = Get-Process | Where-Object { $config['target_processes'].ContainsKey($_.Name) }
+
+    Write-Verbose "Default target process config..."
+    Write-Verbose ($config['target_process_defaults'] | Format-List | Out-String)
+
+    foreach ($proc in $runningTargetProcesses)
     {
         #TODO: these might be useful properties:
         #        $proc.PagedMemorySize64
@@ -692,6 +698,22 @@ function Set-TargetProcessesState
         #        $proc.MainWindowTitle
         #        $proc.MainWindowHandle
         # see also: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process?view=net-8.0
+
+
+ 
+
+        # sanity checking to make sure we aren't about to suspend a trigger process
+        # $runningTriggerProcesses.Name returns an array of all process names
+        #
+        # TODO: think about the reliability of this
+        # e.g. what if a new trigger process starts between the first one and this test
+        #
+        # should we just check that no processes are defined as both trigger and target?
+        if ($runningTriggerProcesses.Name -contains $proc.Name)
+        {
+            Write-Warning "Ignoring target process $($proc.Name) ($($proc.Id)) as it is one of the running trigger processes."
+            continue  # to next target process
+        }
 
         $proc.Refresh()  # refresh the stats for the process
 
@@ -718,6 +740,14 @@ function Set-TargetProcessesState
         # if this process has a different name to the last one
         if ($proc.Name -ne $lastProcessName)
         {
+            Write-Verbose "Override config for $($proc.Name)..."
+            Write-Verbose ($config['target_processes'][$proc.Name] | Format-List | Out-String)
+    
+            $targetProcessConfig = Merge-Hashmaps -Default $config['target_process_defaults'] -Override $config['target_processes'][$proc.Name]
+    
+            Write-Verbose "Merged config for $($proc.Name)..."
+            Write-Verbose ($targetProcessConfig | Format-List | Out-String)
+            
             if ($lastProcessName -ne "")   # if this isn't the very first process
             {
                 # display subtotal for the previous group of processes with the same name
@@ -836,11 +866,11 @@ function Set-TargetProcessesState
         {
             try
             {
-                if ($Suspend)
-                {   
+                if ($Suspend -and $targetProcessConfig['action'] -eq 'suspend')
+                {
                     [ProcessManager]::SuspendProcess($proc.Id)
                 }
-                elseif ($Resume)
+                elseif ($Resume -and $targetProcessConfig['action'] -eq 'suspend')
                 {
                     [ProcessManager]::ResumeProcess($proc.Id)
                 }
@@ -858,7 +888,7 @@ function Set-TargetProcessesState
                 Write-Host "$_"
             }
 
-            if ($Suspend -and $TrimWorkingSet)
+            if ($Suspend -and $targetProcessConfig['trim_working_Set'])
             {
                 [ProcessManager]::TrimWorkingSet($proc.Id)
                 Start-Sleep -Milliseconds 100
@@ -947,6 +977,7 @@ function Reset-Environment
     }
 
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] (Goodbye)> o/"
+    $host.UI.RawUI.WindowTitle = $originalTitle
     Start-Sleep -Milliseconds 500
 }
 
@@ -1202,6 +1233,31 @@ function Test-CmdLineTarget
     return $false
 }
 
+# merge two hashmaps into a new one
+#
+# in PowerShell 7 we'd just use the '+' operator
+function Merge-Hashmaps
+{
+    param (
+        [Parameter(Mandatory = $true)]
+        [Hashtable]$Default,
+
+        [Parameter(Mandatory = $true)]
+        [Hashtable]$Override
+    )
+
+    # necessary as Hashtables are passed by reference
+    $merged = $Default.Clone()
+
+    foreach ($key in $Override.Keys) 
+    {
+        $merged[$key] = $Override[$key]
+    }
+
+    return $merged
+}
+
+
 
 # =============================================================================
 # =============================================================================
@@ -1284,6 +1340,11 @@ $pauseIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/pause.ico"
 $playIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/play.ico"
 $shortcutPath = Join-Path -Path $scriptFolder -ChildPath "$([System.IO.Path]::GetFileNameWithoutExtension($fullScriptPath)).lnk"
 
+<#
+$suspendSoundPath = Join-Path -Path $scriptFolder -ChildPath "/sounds/345912__abstractasylum__1-4-massive-freeze.wav"
+$resumeSoundPath = Join-Path -Path $scriptFolder -ChildPath "/sounds/333012__michael_kur95__jump-03.wav"
+#>
+
 $myDocumentsPath = [System.Environment]::GetFolderPath('MyDocuments')
 
 $existingValidShortcut = $false
@@ -1355,16 +1416,48 @@ Write-Verbose '-------- $config: --------'
 Write-Verbose ($config | Format-List | Out-String)
 #Write-Verbose (Out-String -InputObject $config)
 
-if ($config['showNotifications'])
+
+if ($config['target_process_defaults'])
+{
+    Write-Verbose "******* target_process_defaults"
+    Write-Verbose ($config['target_process_defaults'] | Format-List | Out-String)
+}
+
+if ($config['target_processes'])
+{
+    Write-Verbose "******* target_processes"
+    Write-Verbose ($config['target_processes'] | Format-List | Out-String)
+}
+
+if ($config['trigger_processes'])
+{
+    Write-Verbose "******* trigger_processes"
+    Write-Verbose ($config['trigger_processes'] | Format-List | Out-String)
+}
+
+
+if ($config['show_notifications'])
 {
     Enable-Module -Name "BurntToast"
+    $notificationsHeader = New-BTHeader -Id 'AutoSuspender' -Title 'AutoSuspender'
 }
+
+<#
+if ($config['play_sounds'])
+{
+    $audioPlayer = New-Object System.Media.SoundPlayer    
+}
+#>
 
 $showTargetProcessSubtotalsOnly = $false
 if ($config['showTargetProcessSubtotalsOnly'])
 {
     $showTargetProcessSubtotalsOnly = $true
 }
+
+$originalTitle = $host.UI.RawUI.WindowTitle
+$host.UI.RawUI.WindowTitle = "AutoSuspender v$Version"
+
 
 # Draw the pretty name box
 Write-Host ("{0}{1}{2}" -f $BoxDrawingChars.TopLeft, ([String]::new($BoxDrawingChars.Horizontal, 15)), $BoxDrawingChars.TopRight) -ForegroundColor Yellow
@@ -1445,7 +1538,8 @@ while ($true)
     }
 
     $wasIdleLastLoop = $true
-    $runningTriggerProcesses = Get-Process | Where-Object { $config.triggerProcessNames -contains $_.Name }
+
+    $runningTriggerProcesses = Get-Process | Where-Object { $config['trigger_processes'].ContainsKey($_.Name) }
 
     if ($runningTriggerProcesses)
     {
@@ -1454,12 +1548,27 @@ while ($true)
 
         foreach ($runningTriggerProcess in $runningTriggerProcesses)
         {
-            Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) {PriorityBoost: $($runningTriggerProcess.PriorityBoostEnabled)}"
-            if ($config.showNotifications)
+            Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id))"
+
+            if (-not $runningTriggerProcess.PriorityBoostEnabled)
             {
-                New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "AutoSuspender is minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath
+                Write-Warning "This trigger process is not runining with PriorityBoost enabled"
+            }
+
+            if ($config['show_notifications'])
+            {
+                New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "Minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath -UniqueIdentifier "AutoSuspender" -Sound IM -Header $notificationsHeader
             }
             
+            <#
+            if ($config['play_sounds'])
+            {
+                $audioPlayer.SoundLocation = $suspendSoundPath
+                $audioPlayer.Load()
+                $audioPlayer.Play()
+            }
+            #>
+
             $launcher = Find-Launcher -Process $runningTriggerProcess
             if ($launcher)
             {
@@ -1468,7 +1577,7 @@ while ($true)
             }
         }
 
-        if ($config.lowPriorityWaiting)
+        if ($config['low_priority_waiting'])
         {
             $scriptProcess = Get-Process -Id $PID
             $scriptProcessPreviousPriority = $scriptProcess.PriorityClass
@@ -1481,8 +1590,11 @@ while ($true)
         # Minimise windows of all target processes
         # FIXME: doesn't work for certain apps (e.g. Microsoft Store apps like WhatsApp)
         Write-Host "Minimising target process windows..."
-        foreach ($proc in Get-Process | Where-Object { $config.targetProcessNames -contains $_.Name })
+
+        foreach ($proc in Get-Process | Where-Object { $config['target_processes'].ContainsKey($_.Name) }) # -and $config['targetProcessNames'][$_.Name].minimize })
         {
+
+
             try
             {
                 $numWindowsMinimised = 0;
@@ -1557,7 +1669,7 @@ while ($true)
 
         Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** All trigger processes have exited"
 
-        if ($config.lowPriorityWaiting)
+        if ($config['low_priority_waiting'])
         {
             Write-Host "Restoring AutoSuspender priority class"
             $scriptProcess.PriorityClass = $scriptProcessPreviousPriority
@@ -1565,12 +1677,20 @@ while ($true)
 
         # ---------------------------------------------------------------------------------------------------
 
-        if ($config.showNotifications)
+        if ($config['show_notifications'])
         {
             # FIXME: will only give the name of the last trigger process to exit
-            New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "AutoSuspender is resuming target processes." -AppLogo $playIconPath
+            New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "Resuming target processes." -AppLogo $playIconPath -UniqueIdentifier "AutoSuspender" -Sound IM -Header $notificationsHeader
         }
-            
+
+        <#
+        if ($config['play_sounds'])
+        {
+            $audioPlayer.SoundLocation = $resumeSoundPath
+            $audioPlayer.Load()
+            $audioPlayer.Play()
+        }
+        #>
 
         # FIXME: if you open a game and then you open another game before closing the first, closing the first
         # will result in resuming the suspended processes and then, 2s later, suspending them all again
@@ -1587,8 +1707,8 @@ while ($true)
 
         # Overwatch config file patch for 'BroadcastMarginLeft'
         # ---------------------------------------------------------------------------------------------------
-        if ($config['overwatch2ConfigPatch'] -and ($runningTriggerProcess.Name -eq "Overwatch"))
-        {           
+        if ($config['overwatch2_config_patch'] -and ($runningTriggerProcess.Name -eq "Overwatch"))
+        {
             try
             {
                 $ow2ConfigFile = Join-Path -Path $myDocumentsPath -ChildPath "\Overwatch\Settings\Settings_v0.ini"
