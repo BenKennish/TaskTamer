@@ -6,43 +6,77 @@
 # =======================@
 # any text after a '#'' sign is ignored by AutoSuspender
 
-# list of process names (filename without ".exe")
-# to act as triggers (e.g. video games)
-triggerProcessNames:
-    - FortniteClient-Win64-Shipping
-    - RocketLeague
-    - Overwatch
-    - GW2-64
-    - Among Us
+# default settings for all target processes
+target_process_defaults:
+    minimize: true
+    action: suspend
+    # valid values: suspend, priority_low, priority_below_normal, close, none
+    trim_working_set: false
+    show_subtotal_only: true
+    suspend_launcher: false # UNIMPLEMENTED: any point in it?
 
 # list of process names (filename without ".exe") that AutoSuspender will
 # minimise and suspend whenever any trigger processes are running
-targetProcessNames:
-    - Chrome
-    - Brave
-    - Firefox
-    - MSEdge
-    - Spotify
-    - WhatsApp
-    - Signal
-    # the next 3 processes are game launchers known to AutoSuspender.
-    # even if they are included here, AutoSuspender will never suspend
-    # any that were used to launch the trigger process because this can mess
-    # the trigger process up
-    - Steam
-    - EpicGamesLauncher
-    - Battle.net
+target_processes:
+    "Chrome":
+    "Brave":
+        show_subtotal_only: false
+    "Firefox":
+    "MSEdge":
 
-# do we display Windows Action Center notifications?  true/false
-showNotifications: true
+    "Spotify":
+        action: priority_low
+        trim_working_set: true
+
+    "WhatsApp":
+    "Signal":
+
+    "Explorer":
+        action: close
+        minimize: false
+
+    # the next 3 processes are marked as game launchers.
+    # AutoSuspender will never suspend launchers that were used to launch the
+    # trigger process because this can mess the trigger process up
+    "Steam":
+        is_launcher: true
+    "EpicGamesLauncher":
+        is_launcher: true
+    "Battle.net":
+        is_launcher: true
+
+# list of process names (filename without ".exe")
+# to act as triggers (e.g. video games)
+trigger_processes:
+    "FortniteClient-Win64-Shipping":
+        targetProcesses: # define some custom target proccesses
+            - name: +WindowsTerminal # also target WindowsTerminal for Fortnite
+              minimize: true
+            # use + / - to add or remove target processes
+
+    "RocketLeague":
+    "Overwatch":
+    "Among Us":
+
+    "GW2-64":
+        target_processes_override:
+            - name: -Brave # don't target Brave or Chrome
+              action: suspend # TODO: throw error when other properties given for a "-Process"
+            - name: -Chrome
+            - name: -Firefox
+            - name: -MSEdge
+        suspend_launcher: true # we can suspend Steam launcher.. but why bother?
+
+# do we display Windows Action Center notifications?
+show_notifications: true
 
 # should AutoSuspender set itself to a low CPU priority when waiting for trigger
-# processes to close?  true/false
-lowPriorityWaiting: false
+# processes to close?
+low_priority_waiting: false
 
+# undocumented feature
+overwatch2_config_patch: true
+
+# DEPRECATED. TODO: update script and phase this out
 # only show the subtotals for groups of processes with the same name?
 showTargetProcessSubtotalsOnly: true
-
-# patch Overwatch 2 config file to set BroadcastMarginLeft to 1.0000
-# probably you don't want this unless you are Ben
-overwatch2ConfigPatch: false
