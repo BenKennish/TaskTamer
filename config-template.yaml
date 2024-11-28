@@ -6,38 +6,53 @@
 # =======================@
 # any text after a '#'' sign is ignored by AutoSuspender
 
-# default settings for all target processes
+# this part defines the default settings for target processes
 target_process_defaults:
-    minimize: true
     action: suspend
-    # valid values: suspend, priority_low, priority_below_normal, close, none
-    trim_working_set: false
-    show_subtotal_only: true
-    suspend_launcher: false # UNIMPLEMENTED: any point in it?
+    # main action to take. valid values: suspend, deprioritize, close, none
 
-# list of process names (filename without ".exe") that AutoSuspender will
-# minimise and suspend whenever any trigger processes are running
+    minimize: true
+    # minimizes all windows belonging to the target process.
+
+    trim_working_set: false
+    # trims the RAM (working set) of the target process. although this can free
+    # up lots of RAM for the trigger process, the target process will likely be
+    # considerably slower for a while once resumed, regardless of whether the
+    # trigger process used or benefited from the RAM.
+
+    show_subtotal_only: true
+    # when displaying table of information about target processes,
+    # only show a subtotal for all target processes with the same name.
+
+    is_launcher: false
+    # any target process set as a launcher (e.g. Steam) will not be suspended
+    # if it was used to launch the trigger process, because this can mess the
+    # trigger process up.
+
+# list of target processes ("name": filename without ".exe") that AutoSuspender
+# will 'throttle' (e.g. suspend) whenever any trigger processes are running.
+# any default settings above can be overridden here
 target_processes:
+    # Note: you can just list a process (and just use defaults) like this...
     "Chrome":
-    "Brave":
-        show_subtotal_only: false
     "Firefox":
     "MSEdge":
+    "Brave":
 
     "Spotify":
-        action: priority_low
         trim_working_set: true
 
     "WhatsApp":
+        action: close
     "Signal":
+        action: close
 
     "Explorer":
-        action: close
+        action: deprioritize
         minimize: false
 
-    # the next 3 processes are marked as game launchers.
-    # AutoSuspender will never suspend launchers that were used to launch the
-    # trigger process because this can mess the trigger process up
+    # game launchers to be throttled
+    # unless they were used to launch the trigger process
     "Steam":
         is_launcher: true
     "EpicGamesLauncher":
@@ -49,7 +64,7 @@ target_processes:
 # to act as triggers (e.g. video games)
 trigger_processes:
     "FortniteClient-Win64-Shipping":
-        targetProcesses: # define some custom target proccesses
+        target_process_overrides: # custom target processes (UNIMPLEMENTED)
             - name: +WindowsTerminal # also target WindowsTerminal for Fortnite
               minimize: true
             # use + / - to add or remove target processes
@@ -59,13 +74,13 @@ trigger_processes:
     "Among Us":
 
     "GW2-64":
-        target_processes_override:
+        target_process_overrides: # custom target processes (UNIMPLEMENTED)
             - name: -Brave # don't target Brave or Chrome
-              action: suspend # TODO: throw error when other properties given for a "-Process"
+              action: suspend # TODO: error as no properties allowed when
+              # removing a target process with "-Process"
             - name: -Chrome
             - name: -Firefox
             - name: -MSEdge
-        suspend_launcher: true # we can suspend Steam launcher.. but why bother?
 
 # do we display Windows Action Center notifications?
 show_notifications: true
@@ -74,9 +89,7 @@ show_notifications: true
 # processes to close?
 low_priority_waiting: false
 
-# undocumented feature
-overwatch2_config_patch: true
-
-# DEPRECATED. TODO: update script and phase this out
-# only show the subtotals for groups of processes with the same name?
-showTargetProcessSubtotalsOnly: true
+# workaround for a bug in Overwatch 2
+# patches Settings_v0.ini when it closes to keep BroadcastMarginLeft set to
+# "1.000000" (moves the UI closer to the centre of the screen)
+overwatch2_config_patch: false

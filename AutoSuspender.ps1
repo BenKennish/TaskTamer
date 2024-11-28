@@ -1,47 +1,39 @@
-# AutoSuspender
-#   A PowerShell script by Ben Kennish (ben@kennish.net)
+<#
+AutoSuspender
+   A PowerShell script by Ben Kennish (ben@kennish.net)
 
-# Automatically suspend chosen target processes (and minimise their windows)
-# whenever chosen trigger processes (e.g. video games) are running, then
-# automatically resume the target processes when the trigger process closes.
+Automatically suspend chosen target processes (and minimise their windows)
+whenever chosen trigger processes (e.g. video games) are running, then
+automatically resume the target processes when the trigger process closes.
 
-# ----------- TODO list --------------
-# TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
-#       (running as the user, won't include SYSTEM processes)
-#       NOTE: very likely to suspend things that will cause problems tho
-#
-# TODO: if user gives focus to any suspended process (before game has been closed), resume it temporarily.
-#       this gets quite complicated to do in a way that doesn't potentially increase load on the system
-#       as it can require repeatedly polling in a while() loop
-#       OR perhaps just detect when a game loses focus and then unsuspend everything and resuspend them when it gains focus again
-#       OR they could just manually ctrl-C the script and then run it again before restoring the game app
-#
-# TODO: if user presses a certain key while it's waiting for a trigger process to close, we could temporarily resume the target processes
-#       and then suspend them again when they press the key again (or they give focus to the trigger process)
-#
-# TODO: allow setting CPU priority to Low for certain processes using $proc.PriorityClass property
-#       (and restore previous priority when the trigger process closes) rather than suspending them
-#
-# TODO: define list of processes to trim their working set (rather than full suspending)
-#
-# TODO: print overall system memory stats on suspend and resume
-#
-# TODO: other ways to improve performance
-# - run user configurable list of commands when detecting a game  e.g. wsl --shutdown
-# - adjust windows visual settings
-#       Set registry key for best performance in visual effects
-#       Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
-# -Set Power Plan to High Performance
-#    powercfg /setactive SCHEME_MIN
-# - Example for setting affinity
-#    $process = Get-Process -Name 'SomeProcess'
-#    $process.ProcessorAffinity = 0x0000000F # Adjust based on available cores
-# - Close/suspend unneeded game launchers (only those not used to launch any current game?)
-#
-# TODO: print other global memory usage stats (e.g. total VM, disk cache, etc)
+----------- TODO list --------------
+TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
+       (running as the user, won't include SYSTEM processes)
+       NOTE: very likely to suspend things that will cause problems tho
 
-# Deal with given command line arguments
-# TODO: exit on getting unrecognised command line arguments
+TODO: if user gives focus to any suspended process (before game has been closed), resume it temporarily.
+      this gets quite complicated to do in a way that doesn't potentially increase load on the system
+      as it can require repeatedly polling in a while() loop
+      OR perhaps just detect when a game loses focus and then unsuspend everything and resuspend them when it gains focus again
+      OR they could just manually ctrl-C the script and then run it again before restoring the game app
+TODO: if user presses a certain key while it's waiting for a trigger process to close, we could temporarily resume the target processes
+      and then suspend them again when they press the key again (or they give focus to the trigger process)
+
+TODO: other ways to improve performance
+- run user configurable list of commands when detecting a game  e.g. wsl --shutdown
+- adjust windows visual settings
+      Set registry key for best performance in visual effects
+      Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
+-Set Power Plan to High Performance
+   powercfg /setactive SCHEME_MIN
+- Example for setting affinity
+   $process = Get-Process -Name 'SomeProcess'
+   $process.ProcessorAffinity = 0x0000000F # Adjust based on available cores
+
+TODO: print other global memory usage stats (e.g. total VM, disk cache, etc)
+#>
+
+# these are our command line arguments
 param (
     [switch]$Help,
     [switch]$WhatIf,
@@ -49,14 +41,13 @@ param (
     [switch]$CheckOnce,
     [switch]$Debug,
     [switch]$Verbose,
-    [switch]$TrimWorkingSet,
-    [switch]$GetTriggerProcessStats
+    [switch]$PollTriggers
 )
 
 # everyone loves UTF-8, right?
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$Version = '0.11.0'
+$Version = '0.12.0'
 
 Set-StrictMode -Version Latest   # stricter rules = cleaner code  :)
 
@@ -83,21 +74,10 @@ if ($Verbose -or $Debug)
 }
 
 
-# Hashtable of known launchers
-# key: process name (lowercase), value: descriptive name
-# TODO: maybe this could go in the config file
-# TODO: perhaps we can have some optimisation code specific to the different launchers
-#
-$launchers = @{
-    'steam'             = 'Steam'
-    'epicgameslauncher' = 'Epic Games Launcher'
-    'battle.net'        = 'Battle.net'
-}
-
-
 # the actual characters (in the comments to the right)
 # cannot be used because PowerShell 5.1 interpreter doesn't 
 # like reading in unicode characters during syntax checking
+# (the ones in the comments here are ignored by it)
 $BoxDrawingChars = @{
     TopLeft     = [char]0x250C  # ┌
     TopRight    = [char]0x2510  # ┐
@@ -388,7 +368,6 @@ function Get-FormatWidth
 
 
 
-
 function Format-TableFancy
 {
     param
@@ -400,16 +379,21 @@ function Format-TableFancy
         [Parameter(Mandatory = $true)]
         [string[]]$ColumnHeadings, # Array of column header text
         # because this is a mandatory attribute, none of the array elements can be empty strings
-        # so just pass a " " if you don't want a visible heading
+        # so just pass a space (" ") if you don't want a visible heading
 
         [Parameter(Mandatory = $true)]
         [string[]]$ColumnFormats, # Array of -f format strings to use for each column
 
-        [string]$ColumnSeparator = $BoxDrawingChars.Vertical
+        [string]$ColumnSeparator = $BoxDrawingChars.Vertical,
+
+        # do we alternate row colouring for easier reading?
+        [switch]$RowColouring
     )
     
     begin
     {
+        $RowColouring = $true  # force it for now
+
         if ($ColumnHeadings.Length -ne $ColumnFormats.Length)
         {
             Write-Error "Error: ColumnHeadings and ColumnFormats have different lengths: $(ColumnHeadings.Length) vs $($ColumnFormats.Length)"
@@ -431,10 +415,13 @@ function Format-TableFancy
 
         Write-Host ($headerRow -join $ColumnSeparator) -ForegroundColor Yellow
         Write-Host ($headerUnderlineRow -join [String]::new($BoxDrawingChars.Cross))
+
+        $rowNumber = 0
     }
 
     process
     {
+        $rowNumber++
         try
         {
             if ($Row.Length -ne $ColumnHeadings.Length)
@@ -461,10 +448,19 @@ function Format-TableFancy
                     { 
                         $writeHostParams['-ForegroundColor'] = $cell.ForegroundColor 
                     }
+
                     if ($cell.PSObject.Properties['BackgroundColor']) 
                     { 
                         $writeHostParams['-BackgroundColor'] = $cell.BackgroundColor 
                     }
+                    else 
+                    {
+                        if ($RowColouring -and $rowNumber % 2 -eq 0)
+                        {
+                            $writeHostParams['-BackgroundColor'] = "DarkBlue" 
+                        }
+                    }
+
                     if (-not $cell.PSObject.Properties['data'])
                     {
                         Write-Error "cell is missing data property"
@@ -521,8 +517,10 @@ function Format-TableFancy
 
 
 
-# Display a subtotal row for the previous processes 
+# Display a subtotal row for the previous processes
 # if there was more than 1 with same name
+#
+# TODO: we should just group proceses rather than handling them one-by-one
 # -----------------------------------------------------------------------------
 function Write-Subtotal
 {
@@ -537,17 +535,17 @@ function Write-Subtotal
 
     if ($ForegroundColor -eq "")
     {
-        if ($showTargetProcessSubtotalsOnly)
+        if ($targetProcessesConfig[$LastProcessName]['show_subtotal_only'])
         {
             $ForegroundColor = "Gray"
         }
-        else 
+        else
         {
             $ForegroundColor = "Yellow"
-        }  
+        }
     }
 
-    if ($SameProcessCount -gt 1 -or $showTargetProcessSubtotalsOnly)
+    if ($SameProcessCount -gt 1 -or $targetProcessesConfig[$LastProcessName]['show_subtotal_only'])
     {
         # only show subtotal when there is 2+ processes or if we are only showing subtotals (so we want to show the 'subtotal' for 1 process too)
         if ($null -ne $SameProcessRamDeltaTotal)
@@ -643,19 +641,23 @@ function Get-BytesColour
 
 
 # Suspend / resume target processes
+# other approved verbs, "Optimize", "Limit"
+#
+# TODO: i think we want to send arrays of processes with the same name to this 
+# function.  it'll make subtotalling easier and also terminating.
 # -----------------------------------------------------------------------------
 function Set-TargetProcessesState
 {
-    [CmdletBinding(DefaultParameterSetName = 'Suspend')]
+    [CmdletBinding(DefaultParameterSetName = 'Throttle')]
     param (
         [string]$Launcher = "",
 
-        [Parameter(ParameterSetName = 'Suspend', Mandatory = $true)]
-        [switch]$Suspend,
+        [Parameter(ParameterSetName = 'Throttle', Mandatory = $true)]
+        [switch]$Throttle,
 
-        [Parameter(ParameterSetName = 'Resume', Mandatory = $true)]
-        [switch]$Resume,
-        [Parameter(ParameterSetName = 'Resume')]
+        [Parameter(ParameterSetName = 'Restore', Mandatory = $true)]
+        [switch]$Restore,
+        [Parameter(ParameterSetName = 'Restore')]
         [switch]$NoDeltas
     )
 
@@ -668,27 +670,26 @@ function Set-TargetProcessesState
     $sameProcessRamDeltaTotal = $null
  
     # used to track how the RAM usage of target processes changed during their suspension
-    if ($Resume -and -not $NoDeltas)
+    if ($Restore -and -not $NoDeltas)
     {
         $totalRamDelta = 0
         $sameProcessRamDeltaTotal = 0
     }
     else
     {
-        $NoDeltas = $true  # force NoDeltas to true (so its not unset when $Suspend)
+        $NoDeltas = $true  # force NoDeltas to true (so its not unset when $Throttle)
     }
 
     # using Write-Host not Write-Output as this function can be called while
     # the script is terminating and then has no access to Write-Output pipeline
 
-    # NB: for a -Resume, we don't look at suspendedProcesses array but just do another process scan
+    # NB: for a -Restore, we don't look at suspendedProcesses array but just do another process scan
     # this might result in trying to resume new processes that weren't suspended (by us)
     # (probably doesn't matter but it's not very elegant)
 
-    $runningTargetProcesses = Get-Process | Where-Object { $config['target_processes'].ContainsKey($_.Name) }
 
-    Write-Verbose "Default target process config..."
-    Write-Verbose ($config['target_process_defaults'] | Format-List | Out-String)
+    # TODO: group into processes that have the same name
+    $runningTargetProcesses = Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) }
 
     foreach ($proc in $runningTargetProcesses)
     {
@@ -698,8 +699,6 @@ function Set-TargetProcessesState
         #        $proc.MainWindowTitle
         #        $proc.MainWindowHandle
         # see also: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process?view=net-8.0
-
-
  
 
         # sanity checking to make sure we aren't about to suspend a trigger process
@@ -709,7 +708,10 @@ function Set-TargetProcessesState
         # e.g. what if a new trigger process starts between the first one and this test
         #
         # should we just check that no processes are defined as both trigger and target?
-        if ($runningTriggerProcesses.Name -contains $proc.Name)
+
+        #$runningTriggerProcesses will be falsey if we are doing a -ResumeAll
+
+        if ($runningTriggerProcesses -and $runningTriggerProcesses.Name -contains $proc.Name)
         {
             Write-Warning "Ignoring target process $($proc.Name) ($($proc.Id)) as it is one of the running trigger processes."
             continue  # to next target process
@@ -721,33 +723,25 @@ function Set-TargetProcessesState
         {
             Write-Verbose "Ignoring PID $($proc.Id) as already exited."
             #TODO: write info and account for exited processes with ram deltas
-            # because their memory usage is no 0 bytes
+            # because their memory usage is not 0 bytes
             continue
         }
 
-        if ($Suspend)
+        if ($Throttle)
         {
             # store current RAM usage for this PID before we suspend it
             $pidRamUsagesPreSuspension[$proc.Id] = $proc.WorkingSet64
         }
 
         # ignore launcher processes completely when resuming
-        if ($Resume -and $proc.Name -eq $Launcher)
+        if ($Restore -and $proc.Name -eq $Launcher)
         {
             continue
         }
 
         # if this process has a different name to the last one
         if ($proc.Name -ne $lastProcessName)
-        {
-            Write-Verbose "Override config for $($proc.Name)..."
-            Write-Verbose ($config['target_processes'][$proc.Name] | Format-List | Out-String)
-    
-            $targetProcessConfig = Merge-Hashmaps -Default $config['target_process_defaults'] -Override $config['target_processes'][$proc.Name]
-    
-            Write-Verbose "Merged config for $($proc.Name)..."
-            Write-Verbose ($targetProcessConfig | Format-List | Out-String)
-            
+        {              
             if ($lastProcessName -ne "")   # if this isn't the very first process
             {
                 # display subtotal for the previous group of processes with the same name
@@ -805,7 +799,7 @@ function Set-TargetProcessesState
                     [PSCustomObject] @{ Data = $proc.Name },
                     [PSCustomObject] @{ Data = $proc.Id },
                     [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64) },
-                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignoring Launcher: $($launchers[$Launcher.ToLower()])>" }
+                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignoring Launcher: $($launchers[$Launcher])>" }
                 )
             }
             else 
@@ -815,11 +809,11 @@ function Set-TargetProcessesState
                     [PSCustomObject] @{ Data = $proc.Id },
                     [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64) },
                     [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "n/a" },
-                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignored Launcher: $($launchers[$Launcher.ToLower()])>" }
+                    [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignored Launcher: $($launchers[$Launcher])>" }
                 )
             }
 
-            if (-not $showTargetProcessSubtotalsOnly)
+            if (-not $targetProcessesConfig[$proc.Name]['show_subtotal_only'])
             {
                 Write-Output -NoEnumerate $row
             }
@@ -857,7 +851,7 @@ function Set-TargetProcessesState
                 [PSCustomObject] @{ Data = $windowTitle }
             )
         }
-        if (-not $showTargetProcessSubtotalsOnly)
+        if (-not $targetProcessesConfig[$proc.Name]['show_subtotal_only'])
         {
             Write-Output -NoEnumerate $row
         }
@@ -866,43 +860,81 @@ function Set-TargetProcessesState
         {
             try
             {
-                if ($Suspend -and $targetProcessConfig['action'] -eq 'suspend')
+                switch ($targetProcessesConfig[$proc.Name]['action'])
                 {
-                    [ProcessManager]::SuspendProcess($proc.Id)
-                }
-                elseif ($Resume -and $targetProcessConfig['action'] -eq 'suspend')
-                {
-                    [ProcessManager]::ResumeProcess($proc.Id)
+                    # valid values: suspend, priority_low, priority_below_normal, close, none
+                    'suspend' 
+                    {
+                        if ($Throttle)
+                        {
+                            [ProcessManager]::SuspendProcess($proc.Id)
+                        }
+                        elseif ($Restore)
+                        {
+                            [ProcessManager]::ResumeProcess($proc.Id)
+                        }
+                    }
+                    'close'
+                    {
+                        # TODO: we only want to close the parent process and let it close the children
+                        <#
+                        if ($Throttle)
+                        {
+                            Write-Verbose "Stopping process $($proc.Id)..."
+                            Stop-Process -Id $proc.Id
+                        }
+                        #>
+
+                        Write-Warning "action: 'close' unimplemented so can't do it to process '$($proc.Name)'."
+                    }
+                    'deprioritize'
+                    {
+                        if ($Throttle)
+                        {
+                            # TODO: keep track of previous priority so we can restore it
+                        }
+
+                        Write-Warning "action: 'deprioritize' unimplemented so can't do it to process '$($proc.Name)'."
+                    }
+                    'none'
+                    {
+                        Write-Verbose "Doing nothing to process '$($proc.Name)' as action='none'."
+                    }
+                    default
+                    {
+                        throw "Unknown action '$($targetProcessesConfig[$proc.Name]['action'])' defined for process '$($proc.Name)'"
+                    }
                 }
             }
             catch
             {
                 $verb = "suspend"
-                if ($Resume)
+                if ($Restore)
                 {
                     $verb = "resume"
                 }
 
                 # NB: remember Write-Error won't work from within the script's finally block
+                # TODO: perhaps we should be returning this output so that the context calling this function 
+                # can do what it likes with it.  but Write-Output doesn't work to pass it in a pipeline iirc
                 Write-Host "ERROR: Failed to $($verb) $($proc.Name) ($($proc.Id)):"
                 Write-Host "$_"
             }
 
-            if ($Suspend -and $targetProcessConfig['trim_working_Set'])
+            if ($Throttle -and $targetProcessesConfig[$proc.Name]['trim_working_set'])
             {
                 [ProcessManager]::TrimWorkingSet($proc.Id)
-                Start-Sleep -Milliseconds 100
+                Start-Sleep -Milliseconds 200
                 $proc.Refresh()
-                Write-Host "<RAM trimmed down to: $(ConvertTo-HumanReadable -Bytes $proc.WorkingSet64)>" -ForegroundColor Magenta
+                Write-Host "$($proc.Name) ($($proc.Id)) RAM trimmed to $(ConvertTo-HumanReadable -Bytes $proc.WorkingSet64)" -ForegroundColor Magenta
             }
-
         }
 
-        $lastProcessName = $proc.name
+        $lastProcessName = $proc.Name
     }
 
     # write subtotal row for the last process group (if there were >1 processes)
-    if ($proc.Name -eq $Launcher)
+    if ($lastProcessName -eq $Launcher)
     {
         Write-Subtotal `
             -SameProcessCount $sameProcessCount `
@@ -960,7 +992,7 @@ function Reset-Environment
     if ($suspendedProcesses)
     {
         # $launcher is the global var that should be set when $suspendedProcesses is true
-        Set-TargetProcessesState -Resume -Launcher $launcher
+        Set-TargetProcessesState -Restore -Launcher $launcher
     }
 
     if (Test-Path -Path $lockFilePath)
@@ -1029,7 +1061,7 @@ function Find-Launcher
     # Iterate backwards through the parent processes
     while ($currentProcess)
     {
-        try 
+        try
         {
             # Check if the current process is in the launcher hashtable
             if ($launchers.ContainsKey($currentProcess.Name.ToLower()))
@@ -1110,7 +1142,7 @@ Command line arguments
 -CheckOnce
     Checks for trigger processes only once, exiting immediately if none are running. If one is running, performs usual operations then exits when the trigger process exits (after resuming the target processes). You might use this if you arrange for the script to run every time Windows runs a new process.
 
--GetTriggerProcessStats
+-PollTriggers
     Poll the status of the trigger process, rather than waiting to be told by Windows when it has stopped.  This method enables checking memory usage which can be useful for gathering benchmarking data, but it can have a small performance impact so is disabled by default.
 
 -TrimWorkingSet
@@ -1243,17 +1275,20 @@ function Merge-Hashmaps
         [Hashtable]$Default,
 
         [Parameter(Mandatory = $true)]
+        [AllowNull()]
         [Hashtable]$Override
     )
 
     # necessary as Hashtables are passed by reference
     $merged = $Default.Clone()
 
-    foreach ($key in $Override.Keys) 
+    if ($null -ne $Override)
     {
-        $merged[$key] = $Override[$key]
+        foreach ($key in $Override.Keys) 
+        {
+            $merged[$key] = $Override[$key]
+        }
     }
-
     return $merged
 }
 
@@ -1401,6 +1436,9 @@ if (-not (Test-Path -Path $configPath))
 {    
     # read in the text of the templateFile, remove the header, replace with our header, then save 
     # (?s) dotall mode to make . match newline characters
+
+    Write-Host "Creating config.yaml from config-template.yaml..." -ForegroundColor Yellow
+
     ((Get-Content -Path $templatePath -Raw) -replace "(?s)# @=+\s.*?=+@", $configYamlHeader) | Out-File -FilePath $configPath -Force
 }
 
@@ -1412,28 +1450,26 @@ if ($config -isnot [Hashtable])
     exit 1
 }
 
-Write-Verbose '-------- $config: --------'
-Write-Verbose ($config | Format-List | Out-String)
-#Write-Verbose (Out-String -InputObject $config)
+# TODO: sanity check the presence of certain config parameters?
+# TODO: flag up any unrecognised config parameters?
 
+# build merged config hashtable for target processes using defaults
+$targetProcessesConfig = @{}
 
-if ($config['target_process_defaults'])
-{
-    Write-Verbose "******* target_process_defaults"
-    Write-Verbose ($config['target_process_defaults'] | Format-List | Out-String)
+$config['target_processes'].Keys | ForEach-Object {
+    $targetProcessesConfig[$_] = Merge-Hashmaps -Default $config['target_process_defaults'] -Override $config['target_processes'][$_]
 }
 
-if ($config['target_processes'])
-{
-    Write-Verbose "******* target_processes"
-    Write-Verbose ($config['target_processes'] | Format-List | Out-String)
-}
+Write-Verbose "targetProcessesConfig (merged)..."
+Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
 
-if ($config['trigger_processes'])
-{
-    Write-Verbose "******* trigger_processes"
-    Write-Verbose ($config['trigger_processes'] | Format-List | Out-String)
-}
+
+$launchers = @{}
+$targetProcessesConfig.Keys | Where-Object { $targetProcessesConfig[$_]['is_launcher'] -eq $true } | ForEach-Object { $launchers[$_] = $_ }
+# TODO: set the value to a nice descriptive name for the launcher?
+
+Write-Verbose '$launchers:'
+Write-Verbose ($launchers | ConvertTo-Json)
 
 
 if ($config['show_notifications'])
@@ -1448,12 +1484,6 @@ if ($config['play_sounds'])
     $audioPlayer = New-Object System.Media.SoundPlayer    
 }
 #>
-
-$showTargetProcessSubtotalsOnly = $false
-if ($config['showTargetProcessSubtotalsOnly'])
-{
-    $showTargetProcessSubtotalsOnly = $true
-}
 
 $originalTitle = $host.UI.RawUI.WindowTitle
 $host.UI.RawUI.WindowTitle = "AutoSuspender v$Version"
@@ -1475,12 +1505,12 @@ if ($WhatIf)
     Write-Host "ATTENTION: 'What If' mode enabled!  No suspending, resuming, or minimising will occur" -ForegroundColor Red
 }
 Write-Verbose "scriptPath: $scriptFolder"
-Write-Verbose "GetTriggerProcessStats: $GetTriggerProcessStats"
+Write-Verbose "PollTriggers: $PollTriggers"
 Write-Host ""
 
-# we can print tables using Format-Table like this:
-#   Get-Process | Sort-Object -Property BasePriority | Format-Table -GroupBy BasePriority -Wrap
-# but we then cannot use colour or custom formatting unless using ANSI color codes (as featured in PS 7.1)
+# we set this variable before potentially calling for a -Restore
+# to avoid an error
+$runningTriggerProcesses = @()
 
 if (Test-Path -Path $lockFilePath)
 {
@@ -1493,7 +1523,7 @@ if (Test-Path -Path $lockFilePath)
         
         $columnHeadings = @("NAME", "PID", "RAM", "WINDOW")
         $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-10}")
-        Set-TargetProcessesState -Resume -NoDeltas | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+        Set-TargetProcessesState -Restore -NoDeltas | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
 
         $ResumeAll = $false
         Remove-Item -Path $lockFilePath -Force
@@ -1505,13 +1535,14 @@ if (Test-Path -Path $lockFilePath)
     }
 }
 
+
+
 if ($ResumeAll)
 {
     Write-Output "Resuming all processes ('-ResumeAll')..."
-
     $columnHeadings = @("NAME", "PID", "RAM", "WINDOW")
     $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-10}")    
-    Set-TargetProcessesState -Resume -NoDeltas | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+    Set-TargetProcessesState -Restore -NoDeltas | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats -RowColouring
 }
 
 # create lockfile with our PID in
@@ -1539,6 +1570,7 @@ while ($true)
 
     $wasIdleLastLoop = $true
 
+    # NB: hashtables are case insensitive w.r.t. their keys by default
     $runningTriggerProcesses = Get-Process | Where-Object { $config['trigger_processes'].ContainsKey($_.Name) }
 
     if ($runningTriggerProcesses)
@@ -1591,9 +1623,9 @@ while ($true)
         # FIXME: doesn't work for certain apps (e.g. Microsoft Store apps like WhatsApp)
         Write-Host "Minimising target process windows..."
 
-        foreach ($proc in Get-Process | Where-Object { $config['target_processes'].ContainsKey($_.Name) }) # -and $config['targetProcessNames'][$_.Name].minimize })
-        {
 
+        foreach ($proc in Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) -and $targetProcessesConfig[$_.Name]['minimize'] })
+        {
 
             try
             {
@@ -1626,14 +1658,20 @@ while ($true)
         Write-Host "Suspending target processes..."
         $columnHeadings = @("NAME", "PID", "RAM", "WINDOW")
         $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-10}")
-        Set-TargetProcessesState -Suspend -Launcher $launcher | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+        
+        Set-TargetProcessesState -Throttle -Launcher $launcher | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
    
+        if ($PollTriggers)
+        {
+            Write-Verbose "Polling the trigger processes to get their memory usage"
+        }
+
         # Wait for the trigger process(es) to exit
         foreach ($runningTriggerProcess in $runningTriggerProcesses)
         {
             Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for trigger process $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) to exit..."
 
-            if ($GetTriggerProcessStats)
+            if ($PollTriggers)
             {
                 $peakWorkingSet = 0
                 $peakPagedMemorySize = 0
@@ -1662,9 +1700,8 @@ while ($true)
 
             Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) exited"
 
-            # NOTE: we are waiting for each trigger process to exit individually.  so if there is more than one trigger
-            # processes running at once, we won't be checking the memory stats of them until until the first process 
-            # exits, etc
+            # FIXME: if there is more than one trigger process running, we will checking the memory stats of them in order
+            # and once the first exits, the others might exit too and their stats will be invalid
         }
 
         Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** All trigger processes have exited"
@@ -1697,11 +1734,11 @@ while ($true)
         # which isn't very efficient.  However most people don't run multiple games at once so
         # this isn't a priority to fix
 
-        Write-Host "Resuming target processes..."
+        Write-Host "Restoring target processes..."
 
         $columnHeadings = @("NAME", "PID", "RAM", "CHANGE", "WINDOW")
         $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,11}", "{0,-10}")
-        Set-TargetProcessesState -Resume -Launcher $launcher | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+        Set-TargetProcessesState -Restore -Launcher $launcher | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
 
         $suspendedProcesses = $false
 
