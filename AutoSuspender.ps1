@@ -877,6 +877,8 @@ function Set-TargetProcessesState
                     'close'
                     {
                         # TODO: we only want to close the parent process and let it close the children
+                        # TODO: (optionally?) rerun the process 
+                        # (store the cmd line before closing)
                         <#
                         if ($Throttle)
                         {
@@ -885,7 +887,7 @@ function Set-TargetProcessesState
                         }
                         #>
 
-                        Write-Warning "action: 'close' unimplemented so can't do it to process '$($proc.Name)'."
+                        Write-Warning "Unable to 'close' $($proc.Name) : unimplemented."
                     }
                     'deprioritize'
                     {
@@ -894,7 +896,7 @@ function Set-TargetProcessesState
                             # TODO: keep track of previous priority so we can restore it
                         }
 
-                        Write-Warning "action: 'deprioritize' unimplemented so can't do it to process '$($proc.Name)'."
+                        Write-Warning "Unable to 'deprioritize' $($proc.Name) : unimplemented."
                     }
                     'none'
                     {
@@ -1762,7 +1764,7 @@ while ($true)
                     # FIXME: bug w.r.t. ShowIntro = "0" ended up on the ini file repeated times
                     # but possibly it was caused by writing conflict between Overwatch and this script
                     Write-Host "**** Patching $ow2ConfigFile to fix 'BroadcastMarginLeft'..."
-                    Set-Content -Path $ow2ConfigFile -Value $newContents -Encoding UTF8
+                    Set-Content -Path $ow2ConfigFile -Value $newContents -Encoding UTF8NoBOM
                 }
                 else
                 {
