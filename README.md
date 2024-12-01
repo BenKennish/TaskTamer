@@ -60,3 +60,7 @@ There are some optional command line arguments that temporarily change the way t
 | &#8209;PollTriggers | Poll the status of the trigger process, rather than waiting to be told by Windows when it has stopped, which allows mointoring memory usage. This can be useful for gathering benchmarking data, but it can have a small performance impact so is disabled by default.                            |
 | &#8209;Verbose      | The script will be more descriptive about what's going on.                                                                                                                                                                                                                                        |
 | &#8209;Debug        | Enables debugging mode, useful for anyone wishing to fix bugs in the script.                                                                                                                                                                                                                      |
+
+## Source Code
+
+This project has a [public GitHub repo](https://github.com/BenKennish/AutoSuspender/).
