@@ -1,10 +1,11 @@
 # files for git to ignore
 *.exe
-*.lnk
 *.zip
 config.yaml
-create-release.ps1
 sandbox.ps1
 .prettierrc
 scratchpad.txt
 lock.pid
+# excludes the version subdirectory (the module) when stored within 
+# Documents\WindowsPowerShell\Modules\TaskTamer
+*.*.*/

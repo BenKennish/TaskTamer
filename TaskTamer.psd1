@@ -9,7 +9,7 @@
     RootModule           = 'TaskTamer.psm1'
 
     # Version number of this module.
-    ModuleVersion        = '0.13.0'
+    ModuleVersion        = '0.13.1'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop')
@@ -21,13 +21,17 @@
     Author               = 'Ben Kennish'
 
     # Company or vendor of this module
-    CompanyName          = ''
+    CompanyName          = 'Ben Kennish'
 
     # Copyright statement for this module
     Copyright            = 'Copyright (c) 2024 Ben Kennish. Licensed under the GPL-3.0 License.'
 
     # Description of the functionality provided by this module
-    Description          = "Whenever chosen trigger processes (e.g. video games) are running, automatically suspend chosen target processes (e.g. web browsers, IM apps), resuming them when the trigger process stops. Suspended processes can't use any CPU and Windows is more likely to move their memory from fast RAM to pagefile, thereby improving trigger process performance"
+    Description          = "Whenever chosen 'trigger' processes (e.g. video games) are running, TaskTamer automatically throttles/tames chosen 'target' processes (e.g. web browsers, instant messaging apps, and game launchers), and automatically restores them when the trigger process ends.
+
+The precise nature of the throttle/taming can be defined in the config file, including a choice of suspending a process (the default), setting it to Low priority, closing it, or doing nothing.  Target processes can also have their windows minimized, have their RAM usage ('working set') trimmed, and be defined as a launcher which means they will not be affected if they were responsible for launching the trigger process.
+
+Suspended target processes are effectively frozen and therefore can't slow down the trigger process (or any other running process) by using CPU or accessing the disk or network in the background. Windows is also more likely to move memory used by target processes from fast RAM to the slower pagefile on disk, which leaves more speedy RAM available for the trigger process to use."
 
     # Minimum version of the Windows PowerShell engine required by this module
     PowerShellVersion    = '5.1'
@@ -39,7 +43,7 @@
     # PowerShellHostVersion = ''
 
     # Minimum version of Microsoft .NET Framework required by this module. This prerequisite is valid for the PowerShell Desktop edition only.
-    #DotNetFrameworkVersion = '2.0'
+    #DotNetFrameworkVersion = '4.8'
 
     # Minimum version of the common language runtime (CLR) required by this module. This prerequisite is valid for the PowerShell Desktop edition only.
     # CLRVersion = ''
@@ -72,7 +76,7 @@
     CmdletsToExport      = @()
 
     # Variables to export from this module
-    VariablesToExport    = '*'
+    VariablesToExport    = @()
 
     # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
     AliasesToExport      = @()
@@ -84,7 +88,7 @@
     # ModuleList = @()
 
     # List of all files packaged with this module
-    FileList             = @("TaskTamer.psm1", "config-template.yaml", "README.md")
+    FileList             = @("TaskTamer.psm1", "config-template.yaml", "README.md", "LICENSE.md", "images\play.ico", "images\pause.ico")
 
     # Private data to pass to the module specified in RootModule/ModuleToProcess. This may also contain a PSData hashtable with additional module metadata used by PowerShell.
     PrivateData          = @{
@@ -111,7 +115,7 @@
     } # End of PrivateData hashtable
 
     # HelpInfo URI of this module
-    HelpInfoURI          = 'https://www.bennish.net/TaskTamer/'
+    HelpInfoURI          = 'https://github.com/BenKennish/TaskTamer/'
 
     # Default prefix for commands exported from this module. Override the default prefix using Import-Module -Prefix.
     # DefaultCommandPrefix = ''
