@@ -6,6 +6,5 @@ sandbox.ps1
 .prettierrc
 scratchpad.txt
 lock.pid
-# excludes the version subdirectory (the module) when stored within 
-# Documents\WindowsPowerShell\Modules\TaskTamer
-*.*.*/
+# excludes the subdirectory used for creating and exporting the module
+TaskTamer/

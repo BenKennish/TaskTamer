@@ -73,7 +73,7 @@ Start-TaskTamer -ResumeAll
     Resume all listed target processes and then run as normal
 
 .NOTES
-Version: 0.13.1
+Version: 0.13.3
 Author: Ben Kennish
 License: GPL-3.0
 
@@ -92,7 +92,7 @@ function Start-TaskTamer
         [switch]$WhatIf
     )
 
-    $Version = '0.13.1'
+    $Version = '0.13.3'
 
     Set-StrictMode -Version Latest   # stricter rules = cleaner code  :)
 
@@ -202,10 +202,10 @@ function Start-TaskTamer
             TRight      = [char]0x2524  # ┤
             Cross       = [char]0x253C  # ┼
         }
-        <#
+
         # Add necessary .NET assemblies for API calls
         # using Add-Type cmdlet (C# code)
-        Add-Type -TypeDefinition @"
+        Add-Type @"
     using System;
     using System.Runtime.InteropServices;
 
@@ -376,7 +376,7 @@ function Start-TaskTamer
 
     }
 
-"@ -Language CSharp -Reference "System" #-CompilerOptions "/target:library /platform:x64 /reference:C:\Windows\Microsoft.Net\Framework64\v4.0.30319\System.dll" #>
+"@
 
         # Convert a number of bytes into a more human readable string format
         # -------------------------------------------------------------------
