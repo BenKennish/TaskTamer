@@ -5,7 +5,11 @@ TaskTamer
 Automatically tames / throttles chosen target processes whenever chosen trigger processes (e.g. video games) are running, then
 automatically restores the target processes when the trigger process closes.
 
+you can import this module using:
+ Import-Module -Name ".\TaskTamer.psm1" -Force
+
 ----------- TODO list --------------
+
 TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
        (running as the user, won't include SYSTEM processes)
        NOTE: very likely to suspend things that will cause problems tho
@@ -29,7 +33,8 @@ TODO: other ways to improve performance
    $process = Get-Process -Name 'SomeProcess'
    $process.ProcessorAffinity = 0x0000000F # Adjust based on available cores
 
-TODO: print other global memory usage stats (e.g. total VM, disk cache, etc)
+TODO: auto scan for trigger apps or allow users to select them from the shortcuts within start Menu
+
 #>
 
 <#
@@ -73,7 +78,7 @@ Start-TaskTamer -ResumeAll
     Resume all listed target processes and then run as normal
 
 .NOTES
-Version: 0.13.3
+Version: 0.13.4
 Author: Ben Kennish
 License: GPL-3.0
 
@@ -92,7 +97,7 @@ function Start-TaskTamer
         [switch]$WhatIf
     )
 
-    $Version = '0.13.3'
+    $Version = '0.13.4'
 
     Set-StrictMode -Version Latest   # stricter rules = cleaner code  :)
 
@@ -139,14 +144,16 @@ function Start-TaskTamer
             $scriptFolder = [System.IO.Path]::GetDirectoryName($fullScriptPath)
         }
 
-        $lockFilePath = Join-Path -Path $scriptFolder -ChildPath "/lock.pid"
-        $configPath = Join-Path -Path $scriptFolder -ChildPath "/config.yaml"
-        $templatePath = Join-Path -Path $scriptFolder -ChildPath "/config-template.yaml"
-        $pauseIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/pause.ico"
-        $playIconPath = Join-Path -Path $scriptFolder -ChildPath "/images/play.ico"
-        $shortcutPath = Join-Path -Path $scriptFolder -ChildPath "$([System.IO.Path]::GetFileNameWithoutExtension($fullScriptPath)).lnk"
-        $myDocumentsPath = [System.Environment]::GetFolderPath('MyDocuments')
+        $lockFilePath = Join-Path -Path $env:TEMP -ChildPath "\lock.pid"
 
+        $appDataPath = "$env:LOCALAPPDATA\TaskTamer"
+        $configPath = Join-Path -Path $appDataPath -ChildPath "\config.yaml"
+        
+        $templatePath = Join-Path -Path $scriptFolder -ChildPath "\config-template.yaml"
+        $pauseIconPath = Join-Path -Path $scriptFolder -ChildPath "\images\pause.ico"
+        $playIconPath = Join-Path -Path $scriptFolder -ChildPath "\images\play.ico"
+
+        $shortcutPath = Join-Path -Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -ChildPath "TaskTamer.lnk"
 
         # clean up function
         # -----------------------------------------------------------------------------
@@ -156,7 +163,7 @@ function Start-TaskTamer
             # Write-Output and Write-Error are not available when application is
             # shutting down
 
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] AutoSuspender is shutting down..."
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] TaskTamer is shutting down..."
 
             if ($suspendedProcesses)
             {
@@ -1138,11 +1145,11 @@ function Start-TaskTamer
         function Write-Usage
         {
             Write-Host ""
-            Write-Host "AutoSuspender $Version" -ForegroundColor Yellow
+            Write-Host "TaskTamer $Version" -ForegroundColor Yellow
             Write-Host ""
             Write-Host @"
     Whenever chosen trigger processes (e.g. video games) are running,
-    AutoSuspender automatically suspends chosen target processes (e.g. web
+    TaskTamer automatically suspends chosen target processes (e.g. web
     browsers and instant messaging apps), and automatically resumes them when the
     trigger process ends.
 
@@ -1153,7 +1160,7 @@ function Start-TaskTamer
     more lovely speedy RAM available for the trigger process (e.g. video game) to
     use.
 
-    When the trigger process closes, AutoSuspender will report how much the RAM
+    When the trigger process closes, TaskTamer will report how much the RAM
     usage of the target processes dropped during their suspension.
 
     It can also keep track of the trigger processes memory usage using the
@@ -1163,7 +1170,7 @@ function Start-TaskTamer
     ----------------------
 
     -WhatIf
-        Enables "what if" mode; AutoSuspender doesn't actually suspend or resume any processes or minimise windows but does everything else. Useful for testing and measuring performance benefits of using AutoSuspender.
+        Enables "what if" mode; TaskTamer doesn't actually suspend or resume any processes or minimise windows but does everything else. Useful for testing and measuring performance benefits of using TaskTamer.
 
     -ResumeAll
         Resumes all target processes then run as normal. Handy for when a previous invocation of the function failed to resume everything for some reason.
@@ -1178,7 +1185,7 @@ function Start-TaskTamer
         Trim the working set of all target processes immediately after they are suspended. Although this can free up a lot of RAM for the trigger process, the target processes will likely be considerably slower once resumed, regardless of whether the trigger process used or benefited from the RAM.
 
     -Help
-        Displays a short description of AutoSuspender and a list of possible command line arguments
+        Displays a short description of TaskTamer and a list of possible command line arguments
 "@
 
         }
@@ -1393,39 +1400,36 @@ function Start-TaskTamer
         # a hash table used to map process PIDs to RAM (bytes) usages
         # used to save RAM usage of target processes just before they are suspended
         $pidRamUsagesPreSuspension = @{}
+      
 
-
-        $existingValidShortcut = $false
-        $shell = New-Object -ComObject WScript.Shell
-
-        # Delete any existing broken shortcut
-        if (Test-Path -Path $shortcutPath)
+        # create start menu shortcut if not already present
+        if (-not (Test-Path -Path $shortcutPath))
         {
-            Write-Verbose "Existing Windows shortcut detected at $shortcutPath"
-            $existingValidShortcut = $true
-        }
-
-        if (-not $existingValidShortcut)
-        {
+            $shell = New-Object -ComObject WScript.Shell
             $shortcutLink = $shell.CreateShortcut($shortcutPath)
-            $shortcutLink.TargetPath = $fullScriptPath
+
+            $powerShellPath = Join-Path -Path $env:SystemRoot -ChildPath "System32\WindowsPowerShell\v1.0\powershell.exe"
+
+            $shortcutLink.TargetPath = $powerShellPath
+            $shortcutLink.Arguments = "-ExecutionPolicy Bypass -NoProfile -Command `"Start-TaskTamer`""
+
             $shortcutLink.WorkingDirectory = $scriptFolder
             $shortcutLink.IconLocation = $pauseIconPath
             $shortcutLink.Save()
-
             Write-Host "Windows shortcut created at $shortcutPath"
+
+            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($shell) | Out-Null
+            $shell = $null
         }
 
-        # Clean up the Shell COM object
-        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($shell) | Out-Null
-        $shell = $null
-
-
-        # read YAML config file
-        #Enable-Module -Name "powershell-yaml"
+        # Create $appDataPath if necessary
+        if (-not (Test-Path -Path $appDataPath))
+        {
+            New-Item -Path $appDataPath -ItemType Directory | Out-Null
+        }
 
         $configYamlHeader = @"
-# AutoSuspender config file (YAML format)
+# TaskTamer config file (YAML format)
 # Generated originally from a v$Version template
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 "@
@@ -1435,7 +1439,7 @@ function Start-TaskTamer
             # read in the text of the templateFile, remove the header, replace with our header, then save
             # (?s) dotall mode to make . match newline characters
 
-            Write-Host "Creating config.yaml from config-template.yaml..." -ForegroundColor Yellow
+            Write-Host "Creating $configPath from config-template.yaml..." -ForegroundColor Yellow
             ((Get-Content -Path $templatePath -Raw) -replace "(?s)# @=+\s.*?=+@", $configYamlHeader) | Out-File -FilePath $configPath -Force
         }
         
@@ -1472,21 +1476,8 @@ function Start-TaskTamer
         if ($config['show_notifications'])
         {
             #Enable-Module -Name "BurntToast"
-            $notificationsHeader = New-BTHeader -Id 'AutoSuspender' -Title 'AutoSuspender'
+            $notificationsHeader = New-BTHeader -Id 'TaskTamer' -Title 'TaskTamer'
         }
-
-        <#
-    if ($config['play_sounds'])
-    {
-        $audioPlayer = New-Object System.Media.SoundPlayer
-    }
-    #>
-
-
-
-        #Write-Warning "Something BAD happened"
-        #return $null
-        #return "Throwing hot potato"
 
         if ($WhatIf)
         {
@@ -1507,7 +1498,7 @@ function Start-TaskTamer
 
             if ($pidInLockFile -and -not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue))
             {
-                Write-Output "Previous AutoSuspender didn't close properly.  Assuming crash and resuming all processes..."
+                Write-Output "Previous TaskTamer didn't close properly.  Assuming crash and resuming all processes..."
 
                 $columnHeadings = @("NAME", "PID", "RAM", "WINDOW")
                 $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-10}")
@@ -1518,7 +1509,7 @@ function Start-TaskTamer
             }
             else
             {
-                Write-Host "AutoSuspender is already running.  Exiting..." -ForegroundColor Red
+                Write-Host "TaskTamer is already running.  Exiting..." -ForegroundColor Red
                 return
             }
         }
@@ -1574,7 +1565,7 @@ function Start-TaskTamer
 
                     if ($config['show_notifications'])
                     {
-                        New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "Minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath -UniqueIdentifier "AutoSuspender" -Sound IM -Header $notificationsHeader
+                        New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "Minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath -UniqueIdentifier "TaskTamer" -Sound IM -Header $notificationsHeader
                     }
 
                     <#
@@ -1599,7 +1590,7 @@ function Start-TaskTamer
                     $scriptProcess = Get-Process -Id $PID
                     $scriptProcessPreviousPriority = $scriptProcess.PriorityClass
 
-                    Write-Host "Setting AutoSuspender to a lower priority"
+                    Write-Host "Setting TaskTamer to a lower priority"
                     $scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
                     # ProcessPriorityClass]::Idle is what Task Manager calls "Low"
                 }
@@ -1693,7 +1684,7 @@ function Start-TaskTamer
 
                 if ($config['low_priority_waiting'])
                 {
-                    Write-Host "Restoring AutoSuspender priority class"
+                    Write-Host "Restoring TaskTamer priority class"
                     $scriptProcess.PriorityClass = $scriptProcessPreviousPriority
                 }
 
@@ -1702,17 +1693,8 @@ function Start-TaskTamer
                 if ($config['show_notifications'])
                 {
                     # FIXME: will only give the name of the last trigger process to exit
-                    New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "Resuming target processes." -AppLogo $playIconPath -UniqueIdentifier "AutoSuspender" -Sound IM -Header $notificationsHeader
+                    New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "Resuming target processes." -AppLogo $playIconPath -UniqueIdentifier "TaskTamer" -Sound IM -Header $notificationsHeader
                 }
-
-                <#
-            if ($config['play_sounds'])
-            {
-                $audioPlayer.SoundLocation = $resumeSoundPath
-                $audioPlayer.Load()
-                $audioPlayer.Play()
-            }
-            #>
 
                 # FIXME: if you open a game and then you open another game before closing the first, closing the first
                 # will result in resuming the suspended processes and then, 2s later, suspending them all again
@@ -1728,26 +1710,57 @@ function Start-TaskTamer
                 $suspendedProcesses = $false
 
                 # Overwatch config file patch for 'BroadcastMarginLeft'
+                #
+                # TODO: get OW2 to create a fresh .ini then examine to see if it's \r\n or \n
+                # also check UTF-8 with or without BOM
+                #
                 # ---------------------------------------------------------------------------------------------------
                 if ($config['overwatch2_config_patch'] -and ($runningTriggerProcess.Name -eq "Overwatch"))
                 {
                     try
                     {
-                        $ow2ConfigFile = Join-Path -Path $myDocumentsPath -ChildPath "\Overwatch\Settings\Settings_v0.ini"
-                        Write-Host "overwatch2ConfigPatch set. Examining $ow2ConfigFile ..."
+                        $ow2ConfigFile = Join-Path -Path ([System.Environment]::GetFolderPath('MyDocuments')) -ChildPath "\Overwatch\Settings\Settings_v0.ini"
+                        Write-Host "overwatch2ConfigPatch set. Examining $ow2ConfigFile (in 5s)..."
 
                         # sleep to give extra time for OW2 to save and release lock on the file
-                        Start-Sleep -Seconds 1
+                        Start-Sleep -Seconds 5
 
-                        $contents = Get-Content -Path $ow2ConfigFile -Raw
+                        $contents = Get-Content -Raw -Encoding UTF8 -Path $ow2ConfigFile
 
-                        $newContents = $contents -replace '(?m)^BroadcastMarginLeft\s*=.*$', 'BroadcastMarginLeft = "1.000000"'
+                        # normalise line endings to Windows style (shouldn't be necessary)
+                        #$contents = $contents -replace '\r?\n', "`r`n"
+
+                        # (?m) enables multiline mode
+                        # https://learn.microsoft.com/en-us/dotnet/standard/base-types/regular-expression-options#multiline-mode
+                        # but $ will not recognize the carriage return/line feed character combination (\r\n) as $ always ignores any carriage return (\r).
+                        # To end your match with either \r\n or \n, use the subexpression \r?$ instead of just $. Note that this will make the \r part of the match.
+                        $regex = '(?m)^BroadcastMarginLeft\s*=\s*".*?"(\r?)$'
+                        $replacement = 'BroadcastMarginLeft = "1.000000"$1'
+                        
+                        <#
+                        Write-Host "Regex match details:"
+                        if ($contents -match $regex)
+                        {
+                            Write-Host "Match found!"
+                            $Matches | Out-Host
+                        }
+                        else
+                        {
+                            Write-Host "No match found."
+                        }
+                        #>                       
+                                               
+                        $newContents = $contents -replace $regex, $replacement
+                        
                         if ($contents -ne $newContents)
                         {
                             # FIXME: bug w.r.t. ShowIntro = "0" ended up on the ini file repeated times
                             # but possibly it was caused by writing conflict between Overwatch and this function
                             Write-Host "**** Patching $ow2ConfigFile to fix 'BroadcastMarginLeft'..."
-                            Set-Content -Path $ow2ConfigFile -Value $newContents -Encoding UTF8NoBOM
+                            
+                            # FIXME: will create a BOM
+                            $newContents | Out-File -Encoding UTF8 -FilePath $ow2ConfigFile
+                            #Set-Content -Path $ow2ConfigFile -Value $newContents -Encoding UTF8
                         }
                         else
                         {
@@ -1789,7 +1802,7 @@ function Start-TaskTamer
     }
     catch
     {
-        Write-Host "Caught!"
+        Write-Host "Caught an error! : $_"
         #Write-Host "Error occurred at line: $($PSCmdlet.MyInvocation.ScriptLineNumber)"
         #Write-Host "Detailed Error Info:"
 
@@ -1803,3 +1816,4 @@ function Start-TaskTamer
         Reset-Environment
     }
 }
+

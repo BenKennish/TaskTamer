@@ -1,10 +1,11 @@
 # files for git to ignore
+config.yaml
+lock.pid
 *.exe
 *.zip
-config.yaml
-sandbox.ps1
 .prettierrc
+sandbox.ps1
 scratchpad.txt
-lock.pid
 # excludes the subdirectory used for creating and exporting the module
-TaskTamer/
+packaging/
+make-package.ps1

@@ -9,7 +9,7 @@
     RootModule           = 'TaskTamer.psm1'
 
     # Version number of this module.
-    ModuleVersion        = '0.13.3'
+    ModuleVersion        = '0.13.4'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop')
@@ -102,10 +102,10 @@ Suspended target processes are effectively frozen and therefore can't slow down 
             LicenseUri   = 'https://www.gnu.org/licenses/gpl-3.0.html#license-text'
 
             # A URL to the main website for this project.
-            # ProjectUri = ''
+            ProjectUri   = 'https://github.com/BenKennish/TaskTamer/'
 
             # A URL to an icon representing this module.
-            # IconUri = ''
+            #IconUri = ''
 
             # ReleaseNotes of this module
             ReleaseNotes = 'Initial PS Gallery release of TaskTamer'
