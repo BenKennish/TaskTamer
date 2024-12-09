@@ -3,9 +3,10 @@ config.yaml
 lock.pid
 *.exe
 *.zip
+*.lnk
+
+# excludes certain files Ben uses
 .prettierrc
 sandbox.ps1
-scratchpad.txt
-# excludes the subdirectory used for creating and exporting the module
-packaging/
 make-package.ps1
+scratchpad.txt
