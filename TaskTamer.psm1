@@ -86,6 +86,7 @@ function Invoke-TaskTamer
 {
     # these are our command line arguments
     [CmdletBinding()]
+    [Alias("TaskTamer")]
     param (
         [switch]$ResumeAll,
         [switch]$PollTriggers,
