@@ -72,6 +72,7 @@ trigger_processes:
     "RocketLeague":
     "Overwatch":
     "Among Us":
+    "Marvel-Win64-Shipping":
 
     "GW2-64":
         target_process_overrides: # custom target processes (UNIMPLEMENTED)
