@@ -128,7 +128,8 @@ function Invoke-TaskTamer
             else
             {
                 Write-Host "TaskTamer is already running.  Exiting..." -ForegroundColor Red
-                return
+                Start-Sleep -Seconds 1
+                return $false
             }
         }
 
@@ -153,9 +154,14 @@ function Invoke-TaskTamer
 
         $previousEnv['WindowTitle'] = $host.UI.RawUI.WindowTitle
 
+        return $true
+
     }
 
-    Initialize-Environment
+    if (-not (Initialize-Environment))
+    {
+        return
+    }
 
     # clean up function to call later
     # -----------------------------------------------------------------------------
