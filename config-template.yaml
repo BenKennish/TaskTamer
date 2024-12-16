@@ -1,10 +1,10 @@
 # @=======================
-# AutoSuspender config file template (YAML format)
+# TaskTamer config file template (YAML format)
 # ***DO NOT MODIFY***: The actual config file used by the script is config.yaml
 # Please edit config.yaml instead
-# (it's autocreated from this template on running AutoSuspender)
+# (it's autocreated from this template on running TaskTamer)
 # =======================@
-# any text after a '#'' sign is ignored by AutoSuspender
+# any text after a '#'' sign is ignored by TaskTamer
 
 # this part defines the default settings for target processes
 target_process_defaults:
@@ -29,7 +29,7 @@ target_process_defaults:
     # if it was used to launch the trigger process, because this can mess the
     # trigger process up.
 
-# list of target processes ("name": filename without ".exe") that AutoSuspender
+# list of target processes ("name": filename without ".exe") that TaskTamer
 # will 'throttle' (e.g. suspend) whenever any trigger processes are running.
 # any default settings above can be overridden here
 target_processes:
@@ -86,7 +86,7 @@ trigger_processes:
 # do we display Windows Action Center notifications?
 show_notifications: true
 
-# should AutoSuspender set itself to a low CPU priority when waiting for trigger
+# should TaskTamer set itself to a low CPU priority when waiting for trigger
 # processes to close?
 low_priority_waiting: false
 
