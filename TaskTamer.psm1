@@ -1,4 +1,4 @@
-<#
+﻿<#
 TaskTamer
    A PowerShell project by Ben Kennish (ben@kennish.net)
 
@@ -9,32 +9,57 @@ you can manually import this module using:
 
 ----------- TODO list --------------
 
-TODO: allow defining a whitelist of processes NOT to suspend and we suspend everything else
+TODO: allow a list of NON-target processes, i.e. TaskTamer should target all OTHER processes
        (running as the user, won't include SYSTEM processes)
        NOTE: very likely to suspend things that will cause problems tho
 
-TODO: if user gives focus to any suspended process (before game has been closed), resume it temporarily.
+TODO: if user tries to focus any suspended target process (before game has been closed), resume it temporarily.
       this gets quite complicated to do in a way that doesn't potentially increase load on the system
       as it can require repeatedly polling in a while() loop
-      OR perhaps just detect when a game loses focus and then unsuspend everything and resuspend them when it gains focus again
-      OR they could just manually ctrl-C the script and then run it again before restoring the game app
+      OR
+      perhaps just detect when a game loses focus and then restore everything and tame them when it gains focus again
+      OR
+      they could just manually ctrl-C the script and then run it again before restoring the game app
 
-TODO: if user presses a certain key while it's waiting for a trigger process to close, we could temporarily resume the target processes and then suspend them again when they press the key again (or they give focus to the trigger process)
+TODO: allow user to temporarily restore all target processes by pressing a key and then to retame them with a re-press
+      AND
+      press a key to untame all target processes and suspend all *trigger* processes, then press it again to revert
 
 TODO: other ways to improve performance
-- run user configurable list of commands when detecting a game  e.g. wsl --shutdown
-- adjust windows visual settings
-      Set registry key for best performance in visual effects
-      Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
--Set Power Plan to High Performance
-   powercfg /setactive SCHEME_MIN
-- Example for setting affinity
-   $process = Get-Process -Name 'SomeProcess'
-   $process.ProcessorAffinity = 0x0000000F # Adjust based on available cores
+    - run user configurable list of commands when detecting a game  e.g. wsl --shutdown
+    - adjust windows visual settings
+          Set registry key for best performance in visual effects
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
+    -Set Power Plan to High Performance
+        powercfg /setactive SCHEME_MIN
+    - Example for setting affinity
+        $process = Get-Process -Name 'SomeProcess'
+        $process.ProcessorAffinity = 0x0000000F # Adjust based on available cores
 
-TODO: auto scan for trigger apps or allow users to select them from the shortcuts within start Menu
+TODO: a way to auto scan for trigger apps or allow users to select them from the shortcuts within start Menu
+
+TODO: allow wildcard '*' in process names in config.yaml (e.g. '*Fortnite*')
+
+TODO: allow filtering by process cmd line args
+e.g. for Minecraft "jawaw".exe look for "*minecraft*"" in the cmd line args
+
+TODO: display action taken in a column of the table, e.g. 'suspended', 'deprioritized', 'closed'
 
 #>
+
+# used to store data about a target process pre-taming/throttling
+class ProcessInfo
+{
+    [int]$id
+    [int64]$workingSet = 0
+    [System.Diagnostics.ProcessPriorityClass]$priority = [System.Diagnostics.ProcessPriorityClass]::Normal
+
+    # constructor
+    ProcessInfo([int]$id)
+    {
+        $this.id = $id
+    }
+}
 
 <#
 .SYNOPSIS
@@ -107,32 +132,6 @@ function Invoke-TaskTamer
     {
         Set-StrictMode -Version Latest   # stricter rules = cleaner code  :)
 
-        if (Test-Path -Path $lockFilePath)
-        {
-            $pidInLockFile = Get-Content -Path $lockFilePath
-            Write-Verbose "Lock file exists and contains '$($pidInLockFile)'"
-
-            if ($pidInLockFile -and
-                    (($pidInLockFile -eq $PID) -or
-                -not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue)))
-            {
-                Write-Output "Previous TaskTamer didn't close properly.  Assuming crash and resuming all processes..."
-
-                $columnHeadings = @("NAME", "PID", "RAM", "WINDOW")
-                $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-10}")
-                Set-TargetProcessesState -Restore -NoDeltas |
-                Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
-
-                Remove-Item -Path $lockFilePath -Force
-            }
-            else
-            {
-                Write-Host "TaskTamer is already running.  Exiting..." -ForegroundColor Red
-                Start-Sleep -Seconds 1
-                return $false
-            }
-        }
-
         $previousEnv['ErrorView'] = $ErrorView
         $ErrorView = "DetailedView"  # leverages Get-Error to get much more detailed information for the error.
 
@@ -158,10 +157,36 @@ function Invoke-TaskTamer
 
     }
 
-    if (-not (Initialize-Environment))
+    function Start-Lock
     {
-        return
+        if (Test-Path -Path $lockFilePath)
+        {
+            $pidInLockFile = Get-Content -Path $lockFilePath
+            Write-Verbose "Lock file exists and contains '$($pidInLockFile)'"
+
+            if ($pidInLockFile -and
+                    (($pidInLockFile -eq $PID) -or
+                -not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue)))
+            {
+                Write-Output "Previous TaskTamer didn't close properly.  Assuming crash and resuming all processes..."
+
+                $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
+                $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
+                Set-TargetProcessesState -Restore -NoDeltas |
+                Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+
+                Remove-Item -Path $lockFilePath -Force
+            }
+            else
+            {
+                Write-Host "TaskTamer is already running.  Exiting in 3s..." -ForegroundColor Red
+                Start-Sleep -Seconds 3
+                return $false
+            }
+        }
+        return $true
     }
+
 
     # clean up function to call later
     # -----------------------------------------------------------------------------
@@ -191,7 +216,7 @@ function Invoke-TaskTamer
             }
         }
 
-        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Restoring original environment..."
+        Write-Host "Restoring original environment..."
         Set-StrictMode -Off  # not strictly necessary but "just in cases"
         $ErrorView = $previousEnv['ErrorView']
         $ErrorActionPreference = $previousEnv['ErrorActionPreference']
@@ -212,10 +237,9 @@ function Invoke-TaskTamer
             $host.UI.RawUI.WindowTitle = $previousEnv['WindowTitle']
         }
 
+        Write-Host "(Goodbye)> o/"
 
-        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] (Goodbye)> o/"
-
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Seconds 2
     }
 
 
@@ -552,8 +576,7 @@ function Invoke-TaskTamer
 
             if ($ColumnHeadings.Length -ne $ColumnFormats.Length)
             {
-                Write-Error "Error: ColumnHeadings and ColumnFormats have different lengths: $(ColumnHeadings.Length) vs $($ColumnFormats.Length)"
-                return 1
+                throw "ColumnHeadings and ColumnFormats have different lengths: $(ColumnHeadings.Length) vs $($ColumnFormats.Length)"
             }
 
             # Print column headers
@@ -580,8 +603,7 @@ function Invoke-TaskTamer
             {
                 if ($Row.Length -ne $ColumnHeadings.Length)
                 {
-                    Write-Host "The number of values in the row ($($Row.Length)) does not match the number of columns defined ($($ColumnHeadings.Length))."
-                    return 1
+                    throw "Row cell count ($($Row.Length)) does not match the number of headings columns ($($ColumnHeadings.Length))."
                 }
 
                 # Loop through the cells and apply format and color to individual cells
@@ -637,7 +659,7 @@ function Invoke-TaskTamer
             }
             catch
             {
-                throw "ERROR: $_ on line: $($_.InvocationInfo.ScriptLineNumber), message: $($_.Exception.Message), in: $($_.InvocationInfo.ScriptName), at position: $($_.InvocationInfo.OffsetInLine)"
+                throw "$($_.Exception.Message), on line: $($_.InvocationInfo.ScriptLineNumber), in: $($_.InvocationInfo.ScriptName), at position: $($_.InvocationInfo.OffsetInLine)"
             }
         }
 
@@ -686,54 +708,50 @@ function Invoke-TaskTamer
             }
         }
 
+
+
         if ($SameProcessCount -gt 1 -or $targetProcessesConfig[$LastProcessName]['show_subtotal_only'])
         {
             # only show subtotal when there is 2+ processes or if we are only showing subtotals (so we want to show the 'subtotal' for 1 process too)
-            if ($null -ne $SameProcessRamDeltaTotal)
+
+            if ($Launcher)
             {
-                if ($Launcher)
+                $row = @(
+                    [PSCustomObject] @{ Data = $LastProcessName ; ForegroundColor = "DarkGray"; },
+                    [PSCustomObject] @{ Data = "TOTAL:"; ForegroundColor = $ForegroundColor; },
+                    [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) ; ForegroundColor = "DarkGray"; }
+                )
+
+                if ($null -ne $SameProcessRamDeltaTotal)
                 {
-                    $row = @(
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = $LastProcessName },
-                        [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "TOTAL:" },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamDeltaTotal -DisplayPlus) },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignored Launcher>" }
-                    )
+                    $row += [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamDeltaTotal -DisplayPlus) ; ForegroundColor = "DarkGray"; }
                 }
-                else
-                {
-                    $row = @(
-                        [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = $LastProcessName },
-                        [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "TOTAL:" },
-                        [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
-                        [PSCustomObject] @{ ForegroundColor = (Get-BytesColour -Bytes $SameProcessRamDeltaTotal -NegativeIsPositive); Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamDeltaTotal -DisplayPlus) },
-                        [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "" }
-                    )
-                }
+
+                $row += @(
+                    [PSCustomObject] @{ Data = "Ignored" ; ForegroundColor = "DarkGray"; },
+                    [PSCustomObject] @{ Data = "" }
+                )
+
             }
             else
             {
-                if ($Launcher)
+                $row = @(
+                    [PSCustomObject] @{ Data = $LastProcessName ; ForegroundColor = $ForegroundColor; },
+                    [PSCustomObject] @{ Data = "TOTAL:" ; ForegroundColor = $ForegroundColor; },
+                    [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) ; ForegroundColor = $ForegroundColor; }
+                )
+
+                if ($null -ne $SameProcessRamDeltaTotal)
                 {
-                    # this may not get hit at all anymore as we are excluding launchers from display in the table
-                    $row = @(
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = $LastProcessName },
-                        [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "TOTAL:" },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignored Launcher>" }
-                    )
+                    $row += [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamDeltaTotal -DisplayPlus); ForegroundColor = (Get-BytesColour -Bytes $SameProcessRamDeltaTotal -NegativeIsPositive); }
                 }
-                else
-                {
-                    $row = @(
-                        [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = $LastProcessName },
-                        [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "TOTAL:" },
-                        [PSCustomObject] @{ ForegroundColor = (Get-BytesColour -Bytes $SameProcessRamTotal); Data = (ConvertTo-HumanReadable -Bytes $SameProcessRamTotal) },
-                        [PSCustomObject] @{ ForegroundColor = $ForegroundColor; Data = "" }
-                    )
-                }
+
+                $row += @(
+                    [PSCustomObject] @{ Data = "" },
+                    [PSCustomObject] @{ Data = "" }
+                )
             }
+
             Write-Output -NoEnumerate $row
         }
     }
@@ -802,148 +820,192 @@ function Invoke-TaskTamer
             [switch]$NoDeltas
         )
 
-        $totalRamUsage = 0
-
-        # vars that track groups of proccesses with the same name
-        $lastProcessName = ""
-        $sameProcessCount = 0
-        $sameProcessRamTotal = 0
-        $sameProcessRamDeltaTotal = $null
-
-        # used to track how the RAM usage of target processes changed during their suspension
-        if ($Restore -and -not $NoDeltas)
+        try
         {
-            $totalRamDelta = 0
-            $sameProcessRamDeltaTotal = 0
-        }
-        else
-        {
-            $NoDeltas = $true  # force NoDeltas to true (so its not unset when $Throttle)
-        }
 
-        # using Write-Host not Write-Output as this function can be called while
-        # the script is terminating and then has no access to Write-Output pipeline
+            $totalRamUsage = 0
 
-        # NB: for a -Restore, we don't look at suspendedProcesses array but just do another process scan
-        # this might result in trying to resume new processes that weren't suspended (by us)
-        # (probably doesn't matter but it's not very elegant)
+            # vars that track groups of proccesses with the same name
+            $lastProcessName = ""
+            $sameProcessCount = 0
+            $sameProcessRamTotal = 0
+            $sameProcessRamDeltaTotal = $null
 
-
-        # TODO: group into processes that have the same name
-        $runningTargetProcesses = Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) }
-
-        foreach ($proc in $runningTargetProcesses)
-        {
-            #TODO: these might be useful properties:
-            #        $proc.PagedMemorySize64
-            #        $proc.PriorityBoostEnabled
-            #        $proc.MainWindowTitle
-            #        $proc.MainWindowHandle
-            # see also: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process?view=net-8.0
-
-
-            # sanity checking to make sure we aren't about to suspend a trigger process
-            # $runningTriggerProcesses.Name returns an array of all process names
-            #
-            # TODO: think about the reliability of this
-            # e.g. what if a new trigger process starts between the first one and this test
-            #
-            # should we just check that no processes are defined as both trigger and target?
-
-            #$runningTriggerProcesses will be falsey if we are doing a instant resume at start ("-ResumeAll")
-
-            if ($runningTriggerProcesses -and $runningTriggerProcesses.Name -contains $proc.Name)
+            # used to track how the RAM usage of target processes changed during their suspension
+            if ($Restore -and -not $NoDeltas)
             {
-                Write-Warning "Ignoring target process $($proc.Name) ($($proc.Id)) as it is one of the running trigger processes."
-                continue  # to next target process
-            }
-
-            $proc.Refresh()  # refresh the stats for the process
-
-            if ($proc.HasExited)
-            {
-                Write-Verbose "Ignoring PID $($proc.Id) as already exited."
-                #TODO: write info and account for exited processes with ram deltas
-                # because their memory usage is not 0 bytes
-                continue
-            }
-
-            if ($Throttle)
-            {
-                # store current RAM usage for this PID before we suspend it
-                if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = @{} }
-                $processHistory[$proc.Id]['workingSet'] = $proc.WorkingSet64
-            }
-
-            # ignore launcher processes completely when resuming
-            if ($Restore -and $proc.Name -eq $Launcher)
-            {
-                continue
-            }
-
-            # if this process has a different name to the last one
-            if ($proc.Name -ne $lastProcessName)
-            {
-                if ($lastProcessName -ne "")   # if this isn't the very first process
-                {
-                    # display subtotal for the previous group of processes with the same name
-                    if ($lastProcessName -eq $Launcher)
-                    {
-                        Write-Subtotal `
-                            -SameProcessCount $sameProcessCount `
-                            -LastProcessName $lastProcessName `
-                            -SameProcessRamTotal $sameProcessRamTotal `
-                            -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
-                            -ForegroundColor "DarkGray" `
-                            -Launcher
-                    }
-                    else
-                    {
-                        Write-Subtotal `
-                            -SameProcessCount $sameProcessCount `
-                            -LastProcessName $lastProcessName `
-                            -SameProcessRamTotal $sameProcessRamTotal `
-                            -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal
-                    }
-
-                }
-
-                # store info on this new process name group
-                $lastProcessName = $proc.Name
-                $sameProcessCount = 1
-                $sameProcessRamTotal = $proc.WorkingSet64
-
-                if (-not $NoDeltas)
-                {
-                    if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = @{} }
-                    $sameProcessRamDeltaTotal = $proc.WorkingSet64 - ($processHistory[$proc.Id]['workingSet'])
-                }
+                $totalRamDelta = 0
+                $sameProcessRamDeltaTotal = 0
             }
             else
             {
-                # this process has same name as last one. continuing adding the subtotals
-                $sameProcessCount++
-                $sameProcessRamTotal += $proc.WorkingSet64
-
-                if (-not $NoDeltas)
-                {
-                    if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = @{} }
-                    $sameProcessRamDeltaTotal += ($proc.WorkingSet64 - $processHistory[$proc.Id]['workingSet'])
-                }
+                $NoDeltas = $true  # force NoDeltas to true (so its not unset when $Throttle)
             }
 
-            # this process is a launcher that was used to spawn the trigger process
-            if ($proc.Name -eq $Launcher)
+            # using Write-Host not Write-Output as this function can be called while
+            # the script is terminating and then has no access to Write-Output pipeline
+
+            # NB: for a -Restore, we don't look at suspendedProcesses array but just do another process scan
+            # this might result in trying to resume new processes that weren't suspended (by us)
+            # (probably doesn't matter but it's not very elegant)
+
+
+            # TODO: group into processes that have the same name
+            $runningTargetProcesses = Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) }
+
+            foreach ($proc in $runningTargetProcesses)
             {
-                Write-Verbose "$($proc.Name) ignored - launcher for trigger process"
+                #TODO: these might be useful properties:
+                #        $proc.PagedMemorySize64
+                #        $proc.PriorityBoostEnabled
+                #        $proc.MainWindowTitle
+                #        $proc.MainWindowHandle
+                # see also: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process?view=net-8.0
+
+
+                # sanity checking to make sure we aren't about to suspend a trigger process
+                # $runningTriggerProcesses.Name returns an array of all process names
+                #
+                # TODO: think about the reliability of this
+                # e.g. what if a new trigger process starts between the first one and this test
+                #
+                # should we just check that no processes are defined as both trigger and target?
+
+                #$runningTriggerProcesses will be falsey if we are doing a instant resume at start ("-ResumeAll")
+
+                if ($runningTriggerProcesses -and $runningTriggerProcesses.Name -contains $proc.Name)
+                {
+                    Write-Warning "Ignoring target process $($proc.Name) ($($proc.Id)) as it is one of the running trigger processes."
+                    continue  # to next target process
+                }
+
+                $proc.Refresh()  # refresh the stats for the process
+
+                if ($proc.HasExited)
+                {
+                    Write-Verbose "Ignoring PID $($proc.Id) as already exited."
+                    #TODO: write info and account for exited processes with ram deltas
+                    # because their memory usage is not 0 bytes
+                    continue
+                }
+
+                if ($Throttle)
+                {
+                    # store current RAM usage for this PID before we suspend it
+                    if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = [ProcessInfo]::new($proc.Id) }
+                    $processHistory[$proc.Id].workingSet = $proc.WorkingSet64
+                }
+
+                # ignore launcher processes completely when resuming
+                if ($Restore -and $proc.Name -eq $Launcher)
+                {
+                    continue
+                }
+
+                # if this process has a different name to the last one
+                if ($proc.Name -ne $lastProcessName)
+                {
+                    if ($lastProcessName -ne "")   # if this isn't the very first process
+                    {
+                        # display subtotal for the previous group of processes with the same name
+                        if ($lastProcessName -eq $Launcher)
+                        {
+                            Write-Subtotal `
+                                -SameProcessCount $sameProcessCount `
+                                -LastProcessName $lastProcessName `
+                                -SameProcessRamTotal $sameProcessRamTotal `
+                                -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
+                                -ForegroundColor "DarkGray" `
+                                -Launcher
+                        }
+                        else
+                        {
+                            Write-Subtotal `
+                                -SameProcessCount $sameProcessCount `
+                                -LastProcessName $lastProcessName `
+                                -SameProcessRamTotal $sameProcessRamTotal `
+                                -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal
+                        }
+
+                    }
+
+                    # store info on this new process name group
+                    $lastProcessName = $proc.Name
+                    $sameProcessCount = 1
+                    $sameProcessRamTotal = $proc.WorkingSet64
+
+                    if (-not $NoDeltas)
+                    {
+                        $sameProcessRamDeltaTotal = $proc.WorkingSet64 - ($processHistory[$proc.Id].workingSet)
+                    }
+                }
+                else
+                {
+                    # this process has same name as last one. continuing adding the subtotals
+                    $sameProcessCount++
+                    $sameProcessRamTotal += $proc.WorkingSet64
+
+                    if (-not $NoDeltas)
+                    {
+                        $sameProcessRamDeltaTotal += ($proc.WorkingSet64 - $processHistory[$proc.Id].workingSet)
+                    }
+                }
+
+                # this process is a launcher that was used to spawn the trigger process
+                if ($proc.Name -eq $Launcher)
+                {
+                    Write-Verbose "$($proc.Name) ignored - launcher for trigger process"
+
+                    if ($NoDeltas)
+                    {
+                        $row = @(
+                            [PSCustomObject] @{ Data = $proc.Name },
+                            [PSCustomObject] @{ Data = $proc.Id },
+                            [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64) },
+                            [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "Ignored" },
+                            [PSCustomObject] @{ Data = "" }
+                        )
+                    }
+                    else
+                    {
+                        $row = @(
+                            [PSCustomObject] @{ Data = $proc.Name },
+                            [PSCustomObject] @{ Data = $proc.Id },
+                            [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64) },
+                            [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "n/a" },
+                            [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignored Launcher: $($launchers[$Launcher])>",
+                                [PSCustomObject] @{ Data = "" }
+                            }
+                        )
+                    }
+
+                    if (-not $targetProcessesConfig[$proc.Name]['show_subtotal_only'])
+                    {
+                        Write-Output -NoEnumerate $row
+                    }
+                    continue # to next process
+                }
+
+                $totalRamUsage += $proc.WorkingSet64
+                if (-not $NoDeltas)
+                {
+                    $totalRamDelta += ($proc.WorkingSet64 - $processHistory[$proc.Id].workingSet)
+                }
+
+                $windowTitle = ""
+                if ($proc.MainWindowTitle)
+                {
+                    $windowTitle = $proc.MainWindowTitle
+                }
 
                 if ($NoDeltas)
                 {
                     $row = @(
                         [PSCustomObject] @{ Data = $proc.Name },
                         [PSCustomObject] @{ Data = $proc.Id },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64) },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignoring Launcher: $($launchers[$Launcher])>" }
+                        [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64); ForegroundColor = (Get-BytesColour -Bytes $proc.WorkingSet64) },
+                        [PSCustomObject] @{ Data = $targetProcessesConfig[$proc.Name]['action'] },
+                        [PSCustomObject] @{ Data = $windowTitle }
                     )
                 }
                 else
@@ -951,166 +1013,139 @@ function Invoke-TaskTamer
                     $row = @(
                         [PSCustomObject] @{ Data = $proc.Name },
                         [PSCustomObject] @{ Data = $proc.Id },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64) },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "n/a" },
-                        [PSCustomObject] @{ ForegroundColor = "DarkGray"; Data = "<Ignored Launcher: $($launchers[$Launcher])>" }
+                        [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64) },
+                        [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes ($proc.WorkingSet64 - $processHistory[$proc.id].workingSet) -DisplayPlus); ForegroundColor = (Get-BytesColour -Bytes ($proc.WorkingSet64 - $processHistory[$proc.id].workingSet) -NegativeIsPositive) },
+                        [PSCustomObject] @{ Data = $targetProcessesConfig[$proc.Name]['action'] },
+                        [PSCustomObject] @{ Data = $windowTitle }
                     )
                 }
-
                 if (-not $targetProcessesConfig[$proc.Name]['show_subtotal_only'])
                 {
                     Write-Output -NoEnumerate $row
                 }
-                continue # to next process
+
+                if (!$WhatIf)
+                {
+                    switch ($targetProcessesConfig[$proc.Name]['action'])
+                    {
+                        # valid values: suspend, close, deprioritize, close, none
+                        'suspend'
+                        {
+                            if ($Throttle)
+                            {
+                                [ProcessManager]::SuspendProcess($proc.Id)
+                            }
+                            elseif ($Restore)
+                            {
+                                [ProcessManager]::ResumeProcess($proc.Id)
+                            }
+                        }
+                        'deprioritize'
+                        {
+                            if ($Throttle)
+                            {
+                                # keep track of previous priority so we can restore it
+                                if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = [ProcessInfo]::new($proc.Id) }
+
+                                $processHistory[$proc.Id].priority = $proc.PriorityClass
+                                $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+                                Write-Verbose "$($proc.Name) ($($proc.Id)) priority changed from $($processHistory[$proc.Id].priority) to $($proc.PriorityClass)"
+                            }
+                            elseif ($processHistory -and $processHistory[$proc.Id] -and $processHistory[$proc.Id].priority)
+                            {
+                                $proc.PriorityClass = $processHistory[$proc.Id].priority
+                                Write-Verbose "$($proc.Name) ($($proc.Id)) priority reverted to $($processHistory[$proc.Id].priority)..."
+                            }
+                        }
+                        'close'
+                        {
+                            # TODO: we only want to close the parent process and let it close the children
+                            # TODO: (optionally?) rerun the process
+                            # (store the cmd line before closing)
+                            if ($Throttle)
+                            {
+                                Write-Warning "Unable to close $($proc.Name) ($($proc.Id)): UNIMPLEMENTED."
+                            }
+                            else
+                            {
+                                Write-Warning "Unable to unclose $($proc.Name) ($($proc.Id)): UNIMPLEMENTED."
+                            }
+                        }
+                        'none'
+                        {
+                            Write-Verbose "Doing nothing to process '$($proc.Name) ($($proc.Id))' as action='none'."
+                        }
+                        default
+                        {
+                            throw "Unknown action '$($targetProcessesConfig[$proc.Name]['action'])' defined for process '$($proc.Name)'"
+                        }
+                    }
+
+                    if ($Throttle -and $targetProcessesConfig[$proc.Name]['trim_working_set'])
+                    {
+                        if ($targetProcessesConfig[$proc.Name]['action'] -ne 'close')
+                        {
+                            [ProcessManager]::TrimWorkingSet($proc.Id)
+                            Start-Sleep -Milliseconds 200
+                            $proc.Refresh()
+                            Write-Host "$($proc.Name) ($($proc.Id)) RAM trimmed to $(ConvertTo-HumanReadable -Bytes $proc.WorkingSet64)" -ForegroundColor Magenta
+                        }
+
+                    }
+                }
+
+                $lastProcessName = $proc.Name
             }
 
-            $totalRamUsage += $proc.WorkingSet64
+            # write subtotal row for the last process group (if there were >1 processes)
+            if ($lastProcessName -eq $Launcher)
+            {
+                Write-Subtotal `
+                    -SameProcessCount $sameProcessCount `
+                    -LastProcessName $lastProcessName `
+                    -SameProcessRamTotal $sameProcessRamTotal `
+                    -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
+                    -ForegroundColor "DarkGray" `
+                    -Launcher
+            }
+            else
+            {
+                Write-Subtotal `
+                    -SameProcessCount $sameProcessCount `
+                    -LastProcessName $lastProcessName `
+                    -SameProcessRamTotal $sameProcessRamTotal `
+                    -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal
+            }
+
+            # write final total row
             if (-not $NoDeltas)
             {
-                if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = @{} }
-                $totalRamDelta += ($proc.WorkingSet64 - $processHistory[$proc.Id]['workingSet'])
-            }
-
-            $windowTitle = ""
-            if ($proc.MainWindowTitle)
-            {
-                $windowTitle = "[$($proc.MainWindowTitle)]"
-            }
-
-            if ($NoDeltas)
-            {
                 $row = @(
-                    [PSCustomObject] @{ Data = $proc.Name },
-                    [PSCustomObject] @{ Data = $proc.Id },
-                    [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64); ForegroundColor = (Get-BytesColour -Bytes $proc.WorkingSet64) },
-                    [PSCustomObject] @{ Data = $windowTitle }
+                    [PSCustomObject] @{ Data = "<TOTAL>"; ForegroundColor = "Yellow" },
+                    [PSCustomObject] @{ Data = "+++++"; ForegroundColor = "Yellow" },
+                    [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $totalRamUsage); ForegroundColor = "Yellow"; },
+                    [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $totalRamDelta -DisplayPlus); ForegroundColor = (Get-BytesColour -Bytes $totalRamDelta -NegativeIsPositive) },
+                    [PSCustomObject] @{ Data = "" },
+                    [PSCustomObject] @{ Data = "" }
                 )
+                Write-Output -NoEnumerate $row
             }
             else
             {
                 $row = @(
-                    [PSCustomObject] @{ Data = $proc.Name },
-                    [PSCustomObject] @{ Data = $proc.Id },
-                    [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64) },
-                    [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes ($proc.WorkingSet64 - $processHistory[$proc.id]['workingSet']) -DisplayPlus); ForegroundColor = (Get-BytesColour -Bytes ($proc.WorkingSet64 - $processHistory[$proc.id]['workingSet']) -NegativeIsPositive) },
-                    [PSCustomObject] @{ Data = $windowTitle }
+                    [PSCustomObject] @{ Data = "<TOTAL>"; ForegroundColor = "Yellow"; },
+                    [PSCustomObject] @{ Data = "+++++"; ForegroundColor = "Yellow" },
+                    [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $totalRamUsage); ForegroundColor = (Get-BytesColour -Bytes $totalRamUsage) },
+                    [PSCustomObject] @{ Data = "" },
+                    [PSCustomObject] @{ Data = "" }
                 )
-            }
-            if (-not $targetProcessesConfig[$proc.Name]['show_subtotal_only'])
-            {
                 Write-Output -NoEnumerate $row
             }
 
-            if (!$WhatIf)
-            {
-                switch ($targetProcessesConfig[$proc.Name]['action'])
-                {
-                    # valid values: suspend, close, deprioritize, close, none
-                    'suspend'
-                    {
-                        if ($Throttle)
-                        {
-                            [ProcessManager]::SuspendProcess($proc.Id)
-                        }
-                        elseif ($Restore)
-                        {
-                            [ProcessManager]::ResumeProcess($proc.Id)
-                        }
-                    }
-                    'deprioritize'
-                    {
-                        if ($Throttle)
-                        {
-                            # keep track of previous priority so we can restore it
-                            if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = @{} }
-                            $processHistory[$proc.Id]['priority'] = $proc.PriorityClass
-                            Write-Verbose "$($proc.Name) ($($proc.Id)) has priority: $($proc.PriorityClass)"
-                            $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
-                        }
-                        else
-                        {
-                            Write-Verbose "$($proc.Name) ($($proc.Id)) to previous priority..."
-                            $proc.PriorityClass = $processHistory[$proc.Id]['priority']
-                        }
-                    }
-                    'close'
-                    {
-                        # TODO: we only want to close the parent process and let it close the children
-                        # TODO: (optionally?) rerun the process
-                        # (store the cmd line before closing)
-                        <#
-                        if ($Throttle)
-                        {
-                            Write-Verbose "Stopping process $($proc.Id)..."
-                            Stop-Process -Id $proc.Id
-                        }
-                        #>
-
-                        Write-Warning "Unable to 'close' $($proc.Name) ($($proc.Id)) : unimplemented."
-                    }
-                    'none'
-                    {
-                        Write-Verbose "Doing nothing to process '$($proc.Name) ($($proc.Id))' as action='none'."
-                    }
-                    default
-                    {
-                        throw "Unknown action '$($targetProcessesConfig[$proc.Name]['action'])' defined for process '$($proc.Name)'"
-                    }
-                }
-
-                if ($Throttle -and $targetProcessesConfig[$proc.Name]['trim_working_set'])
-                {
-                    [ProcessManager]::TrimWorkingSet($proc.Id)
-                    Start-Sleep -Milliseconds 200
-                    $proc.Refresh()
-                    Write-Host "$($proc.Name) ($($proc.Id)) RAM trimmed to $(ConvertTo-HumanReadable -Bytes $proc.WorkingSet64)" -ForegroundColor Magenta
-                }
-            }
-
-            $lastProcessName = $proc.Name
         }
-
-        # write subtotal row for the last process group (if there were >1 processes)
-        if ($lastProcessName -eq $Launcher)
+        catch
         {
-            Write-Subtotal `
-                -SameProcessCount $sameProcessCount `
-                -LastProcessName $lastProcessName `
-                -SameProcessRamTotal $sameProcessRamTotal `
-                -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal `
-                -ForegroundColor "DarkGray" `
-                -Launcher
-        }
-        else
-        {
-            Write-Subtotal `
-                -SameProcessCount $sameProcessCount `
-                -LastProcessName $lastProcessName `
-                -SameProcessRamTotal $sameProcessRamTotal `
-                -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal
-        }
-
-        # write final total row
-        if (-not $NoDeltas)
-        {
-            $row = @(
-                [PSCustomObject] @{ Data = "<TOTAL>"; ForegroundColor = "Yellow" },
-                [PSCustomObject] @{ Data = "+++++"; ForegroundColor = "Yellow" },
-                [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $totalRamUsage); ForegroundColor = "Yellow"; },
-                [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $totalRamDelta -DisplayPlus); ForegroundColor = (Get-BytesColour -Bytes $totalRamDelta -NegativeIsPositive) },
-                [PSCustomObject] @{ Data = ""; ForegroundColor = "Yellow" }
-            )
-            Write-Output -NoEnumerate $row
-        }
-        else
-        {
-            $row = @(
-                [PSCustomObject] @{ Data = "<TOTAL>"; ForegroundColor = "Yellow"; },
-                [PSCustomObject] @{ Data = "+++++"; ForegroundColor = "Yellow" },
-                [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $totalRamUsage); ForegroundColor = (Get-BytesColour -Bytes $totalRamUsage) },
-                [PSCustomObject] @{ Data = ""; ForegroundColor = "Yellow" }
-            )
-            Write-Output -NoEnumerate $row
+            throw $_
         }
 
     }
@@ -1342,6 +1377,40 @@ function Invoke-TaskTamer
         return $merged
     }
 
+    function Read-ConfigFile
+    {
+        $configYamlHeader = @"
+# TaskTamer config file (YAML format)
+# Generated originally from a v$Version template
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+"@
+        if (-not (Test-Path -Path $configPath))
+        {
+            # read in the text of the templateFile, remove the header, replace with our header, then save
+            # (?s) dotall mode to make . match newline characters
+
+            Write-Host "Creating $configPath from config-template.yaml..." -ForegroundColor Yellow
+                ((Get-Content -Path $templatePath -Raw) -replace "(?s)# @=+\s.*?=+@", $configYamlHeader) | Out-File -FilePath $configPath -Force
+        }
+
+        $config = Get-Content -Path $configPath -Raw | ConvertFrom-Yaml
+
+        if ($config -isnot [Hashtable])
+        {
+            throw "Config YAML file conversion created $($config.GetType().Name), expected Hashtable"
+        }
+
+        # TODO: sanity check the presence of certain config parameters?
+        # TODO: flag up any unrecognised config parameters?
+
+        # build merged config hashtable for target processes using defaults
+        $config['target_processes'].Keys | ForEach-Object {
+            $targetProcessesConfig[$_] = Merge-Hashmaps -Default $config['target_process_defaults'] -Override $config['target_processes'][$_]
+        }
+
+        return $config
+    }
+
     # =============================================================================
     # =============================================================================
 
@@ -1349,6 +1418,11 @@ function Invoke-TaskTamer
 
     # =============================================================================
     # =============================================================================
+
+    if (-not (Initialize-Environment))
+    {
+        return
+    }
 
     $cleanupAction = {
         Write-Verbose "Cleaning up..."
@@ -1387,6 +1461,18 @@ function Invoke-TaskTamer
             ([String]::new($BoxDrawingChars.Horizontal, $boxLength)),
         $BoxDrawingChars.BottomRight) -ForegroundColor Yellow
 
+    Write-Verbose "Running from $($MyInvocation.MyCommand.Module.ModuleBase)"
+
+    # Known PowerShell module installation paths
+    $userModulesPath = Join-Path -Path $HOME -ChildPath 'Documents\WindowsPowerShell\Modules'
+
+    # Check if the module base is contained within the PS Gallery autoloading path for the current user
+    if (-not ($moduleBase -like "$userModulesPath*"))
+    {
+        Write-Host "[Development version]" -ForegroundColor Cyan
+    }
+
+
     # Check if any unexpected arguments were provided
     # (they get leftover within $args)
     if ($args.Count -gt 0)
@@ -1396,10 +1482,11 @@ function Invoke-TaskTamer
         return
     }
 
-    # a hash table used to map process PIDs of target processes to information about them prior to being tamed/throttled
-    # e.g. $processHistory[1234]['workingSet'] stores the working set RAM (bytes) usage of PID 1234
-    # FIXME: this should really be a hashmap of objects!
+    # a hash table used to map process PIDs of target processes to objects storing information about their state prior to being tamed/throttled
+    # e.g. $processHistory[1234].workingSet stores the working set RAM (bytes) usage of PID 1234
     $processHistory = @{}
+
+
 
     # create start menu shortcut if not already present
     if (-not (Test-Path -Path $shortcutPath))
@@ -1427,48 +1514,22 @@ function Invoke-TaskTamer
         New-Item -Path $appDataPath -ItemType Directory | Out-Null
     }
 
-    $configYamlHeader = @"
-# TaskTamer config file (YAML format)
-# Generated originally from a v$Version template
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-"@
-
-    if (-not (Test-Path -Path $configPath))
-    {
-        # read in the text of the templateFile, remove the header, replace with our header, then save
-        # (?s) dotall mode to make . match newline characters
-
-        Write-Host "Creating $configPath from config-template.yaml..." -ForegroundColor Yellow
-            ((Get-Content -Path $templatePath -Raw) -replace "(?s)# @=+\s.*?=+@", $configYamlHeader) | Out-File -FilePath $configPath -Force
-    }
-
-
-    $config = Get-Content -Path $configPath -Raw | ConvertFrom-Yaml
-
-    if ($config -isnot [Hashtable])
-    {
-        throw "Config YAML file conversion created $($config.GetType().Name), expected Hashtable"
-    }
-
-    # TODO: sanity check the presence of certain config parameters?
-    # TODO: flag up any unrecognised config parameters?
-
-    # build merged config hashtable for target processes using defaults
     $targetProcessesConfig = @{}
+    $config = Read-ConfigFile
+    #Write-Verbose "targetProcessesConfig (merged)..."
+    #Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
 
-    $config['target_processes'].Keys | ForEach-Object {
-        $targetProcessesConfig[$_] = Merge-Hashmaps -Default $config['target_process_defaults'] -Override $config['target_processes'][$_]
+    if (-not (Start-Lock))
+    {
+        return
     }
-
-    Write-Verbose "targetProcessesConfig (merged)..."
-    Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
 
 
     $launchers = @{}
     $targetProcessesConfig.Keys | Where-Object { $targetProcessesConfig[$_]['is_launcher'] -eq $true } | ForEach-Object { $launchers[$_] = $_ }
     # TODO: set the value to a nice descriptive name for the launcher?
 
-    Write-Verbose '$launchers:'
+    Write-Verbose '$launchers :'
     Write-Verbose ($launchers | ConvertTo-Json)
 
 
@@ -1499,8 +1560,8 @@ function Invoke-TaskTamer
         if ($ResumeAll)
         {
             Write-Output "Resuming all processes ('-ResumeAll')..."
-            $columnHeadings = @("NAME", "PID", "RAM", "WINDOW")
-            $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-10}")
+            $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
+            $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
             Set-TargetProcessesState -Restore -NoDeltas | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
         }
 
@@ -1533,7 +1594,7 @@ function Invoke-TaskTamer
 
                 foreach ($runningTriggerProcess in $runningTriggerProcesses)
                 {
-                    Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id))"
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id))" -ForegroundColor Cyan
 
                     if (-not $runningTriggerProcess.PriorityBoostEnabled)
                     {
@@ -1548,7 +1609,7 @@ function Invoke-TaskTamer
                     $launcher = Find-Launcher -Process $runningTriggerProcess
                     if ($launcher)
                     {
-                        Write-Output "**** Detected running using launcher '$launcher' ($($launchers[$launcher]))"
+                        Write-Host "**** Detected running using launcher '$launcher' ($($launchers[$launcher]))"
                         #TODO: insert launcher specific configuration/optimisation here?
                     }
                 }
@@ -1558,14 +1619,14 @@ function Invoke-TaskTamer
                     $scriptProcess = Get-Process -Id $PID
                     $scriptProcessPreviousPriority = $scriptProcess.PriorityClass
 
-                    Write-Host "Setting TaskTamer to a lower priority"
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Setting TaskTamer to a lower priority"
                     $scriptProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
                     # ProcessPriorityClass]::Idle is what Task Manager calls "Low"
                 }
 
                 # Minimise windows of all target processes
                 # FIXME: doesn't work for certain apps (e.g. Microsoft Store apps like WhatsApp)
-                Write-Host "Minimising target process windows..."
+                Write-Host "**** Minimising target process windows..."
 
 
                 foreach ($proc in Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) -and $targetProcessesConfig[$_.Name]['minimize'] })
@@ -1599,9 +1660,9 @@ function Invoke-TaskTamer
                 # Wait a short time before suspending to ensure minimize commands have been processed
                 Start-Sleep -Milliseconds 250
 
-                Write-Host "Suspending target processes..."
-                $columnHeadings = @("NAME", "PID", "RAM", "WINDOW")
-                $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-10}")
+                Write-Host "**** Taming target processes..."
+                $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
+                $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
 
                 Set-TargetProcessesState -Throttle -Launcher $launcher | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
 
@@ -1628,21 +1689,21 @@ function Invoke-TaskTamer
                             $peakWorkingSet = [Math]::Max($runningTriggerProcess.PeakWorkingSet64, $peakWorkingSet)
                             $peakPagedMemorySize = [Math]::Max($runningTriggerProcess.PeakPagedMemorySize64, $peakPagedMemorySize)
 
-                            Write-Debug "$($runningTriggerProcess.Name) Peak WS: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
-                            Write-Debug "$($runningTriggerProcess.Name) Peak Paged: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
+                            Write-Debug "[$(Get-Date -Format 'HH:mm:ss')] $($runningTriggerProcess.Name) Peak WS: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
+                            Write-Debug "[$(Get-Date -Format 'HH:mm:ss')] $($runningTriggerProcess.Name) Peak Paged: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
 
                             Start-Sleep -Seconds 2  #hardcoded now
                         }
 
-                        Write-Host "$($runningTriggerProcess.Name) Peak WS: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
-                        Write-Host "$($runningTriggerProcess.Name) Peak Paged: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
+                        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $($runningTriggerProcess.Name) Peak WS: $(ConvertTo-HumanReadable -Bytes $peakWorkingSet)"
+                        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $($runningTriggerProcess.Name) Peak Paged: $(ConvertTo-HumanReadable -Bytes $peakPagedMemorySize)"
                     }
                     else
                     {
                         $runningTriggerProcess.WaitForExit()
                     }
 
-                    Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) exited"
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) exited" -ForegroundColor Cyan
 
                     # FIXME: if there is more than one trigger process running, we will checking the memory stats of them in order
                     # and once the first exits, the others might exit too and their stats will be invalid
@@ -1669,10 +1730,10 @@ function Invoke-TaskTamer
                 # which isn't very efficient.  However most people don't run multiple games at once so
                 # this isn't a priority to fix
 
-                Write-Host "Restoring target processes..."
+                Write-Host "**** Restoring target processes..."
 
-                $columnHeadings = @("NAME", "PID", "RAM", "CHANGE", "WINDOW")
-                $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,11}", "{0,-10}")
+                $columnHeadings = @("NAME", "PID", "RAM", "ΔRAM", "ACTION", "WINDOW")
+                $columnFormats = @("{0,-17}", " {0,-6}", "{0,10}", "{0,11}", "{0,-13}", "{0,-20}")
                 Set-TargetProcessesState -Restore -Launcher $launcher | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
 
                 $suspendedProcesses = $false
@@ -1688,10 +1749,10 @@ function Invoke-TaskTamer
                     try
                     {
                         $ow2ConfigFile = Join-Path -Path ([System.Environment]::GetFolderPath('MyDocuments')) -ChildPath "\Overwatch\Settings\Settings_v0.ini"
-                        Write-Host "overwatch2ConfigPatch set. Examining $ow2ConfigFile (in 5s)..."
+                        Write-Verbose "overwatch2ConfigPatch set. Examining $ow2ConfigFile (in 2s)..."
 
                         # sleep to give extra time for OW2 to save and release lock on the file
-                        Start-Sleep -Seconds 5
+                        Start-Sleep -Seconds 2
 
                         $contents = Get-Content -Raw -Encoding UTF8 -Path $ow2ConfigFile
 
@@ -1704,19 +1765,6 @@ function Invoke-TaskTamer
                         # To end your match with either \r\n or \n, use the subexpression \r?$ instead of just $. Note that this will make the \r part of the match.
                         $regex = '(?m)^BroadcastMarginLeft\s*=\s*".*?"(\r?)$'
                         $replacement = 'BroadcastMarginLeft = "1.000000"$1'
-
-                        <#
-                        Write-Host "Regex match details:"
-                        if ($contents -match $regex)
-                        {
-                            Write-Host "Match found!"
-                            $Matches | Out-Host
-                        }
-                        else
-                        {
-                            Write-Host "No match found."
-                        }
-                        #>
 
                         $newContents = $contents -replace $regex, $replacement
 
@@ -1732,7 +1780,7 @@ function Invoke-TaskTamer
                         }
                         else
                         {
-                            Write-Host "No patching required"
+                            Write-Verbose "No patching required"
                         }
                     }
                     catch
@@ -1759,7 +1807,7 @@ function Invoke-TaskTamer
 
             if (-not ($wasIdleLastLoop))
             {
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds... {Press Q to Quit}"
+                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds... { Press Q to Quit }"
             }
 
             if (Wait-ForKeyPress -Seconds 3 -KeyCharacter "Q")
@@ -1770,17 +1818,43 @@ function Invoke-TaskTamer
     }
     catch
     {
-        Write-Host "Caught an error! : $_"
-        #Write-Host "Error occurred at line: $($PSCmdlet.MyInvocation.ScriptLineNumber)"
-        #Write-Host "Detailed Error Info:"
+        #Show-ErrorDetails -ErrorRecord $_
 
-        Write-Host "Line: $($_.InvocationInfo.ScriptLineNumber)"
-        Write-Host "Command: $($_.InvocationInfo.InvocationName)"
-        Write-Host $_
+        Write-Host "ERROR   : $_" -ForegroundColor DarkRed
+        Write-Host ""
+        Write-Host "Command : $($_.InvocationInfo.InvocationName)" -ForegroundColor DarkRed
+        Write-Host "Location: $($_.InvocationInfo.PositionMessage)" -ForegroundColor DarkRed
+        #Write-Host "Line    : $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor DarkRed
+        #Write-Host "Script  : $($_.InvocationInfo.PSCommandPath)" -ForegroundColor DarkRed
+        Write-Host ""
+        Write-Host "Exiting in 10s. Press space to exit immediately..."
+        $null = Wait-ForKeyPress -Seconds 10 -KeyCharacter ' '
     }
     finally
     {
-        Write-Host "Finally...."
+        Write-Verbose "Finally...."
         Reset-Environment
     }
 }
+
+# Define a function to format and show detailed error information
+# FIXME: not working as expected
+<#
+function Show-ErrorDetails
+{
+    param (
+        [Parameter(Mandatory)]
+        [System.Management.Automation.ErrorRecord]$ErrorRecord
+    )
+
+    Write-Host "Error: $($ErrorRecord.Exception.Message)" -ForegroundColor Red
+    Write-Host "Type: $($ErrorRecord.Exception.GetType().FullName)"
+    #Write-Host "Stack Trace:" -ForegroundColor Yellow
+    #Write-Host $ErrorRecord.Exception.StackTrace
+
+    Write-Host "`nPowerShell Call Stack:" -ForegroundColor Cyan
+    Get-PSCallStack | ForEach-Object {
+        Write-Host " - Function: $($_.FunctionName), File: $($_.ScriptName), Line: $($_.ScriptLineNumber)"
+    }
+}
+#>
