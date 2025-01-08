@@ -45,6 +45,8 @@ e.g. for Minecraft "jawaw".exe look for "*minecraft*"" in the cmd line args
 
 TODO: display action taken in a column of the table, e.g. 'suspended', 'deprioritized', 'closed'
 
+TODO: restore all windows that were minimized when the trigger process ran
+
 #>
 
 # used to store data about a target process pre-taming/throttling
@@ -159,6 +161,14 @@ function Invoke-TaskTamer
 
     function Start-Lock
     {
+        param
+        (
+            [ValidateScript({ $_.Value -is [bool] })]
+            [ref]$ResumedAll
+        )
+
+        $ResumedAll.Value = $false
+
         if (Test-Path -Path $lockFilePath)
         {
             $pidInLockFile = Get-Content -Path $lockFilePath
@@ -168,12 +178,13 @@ function Invoke-TaskTamer
                     (($pidInLockFile -eq $PID) -or
                 -not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue)))
             {
-                Write-Output "Previous TaskTamer didn't close properly.  Assuming crash and resuming all processes..."
+                Write-Host "Previous TaskTamer didn't close properly.  Assuming crash and resuming all processes..."
 
                 $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
                 $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
                 Set-TargetProcessesState -Restore -NoDeltas |
                 Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+                $ResumedAll.Value = $true
 
                 Remove-Item -Path $lockFilePath -Force
             }
@@ -1033,11 +1044,25 @@ function Invoke-TaskTamer
                         {
                             if ($Throttle)
                             {
-                                [ProcessManager]::SuspendProcess($proc.Id)
+                                try
+                                {
+                                    [ProcessManager]::SuspendProcess($proc.Id)
+                                }
+                                catch
+                                {
+                                    Write-Warning "Failed to suspend $($proc.Name) ($($proc.ID)):`n$_"
+                                }
                             }
                             elseif ($Restore)
                             {
-                                [ProcessManager]::ResumeProcess($proc.Id)
+                                try
+                                {
+                                    [ProcessManager]::ResumeProcess($proc.Id)
+                                }
+                                catch
+                                {
+                                    Write-Warning "Failed to resume $($proc.Name) ($($proc.ID)):`n$_"
+                                }
                             }
                         }
                         'deprioritize'
@@ -1068,12 +1093,12 @@ function Invoke-TaskTamer
                             }
                             else
                             {
-                                Write-Warning "Unable to unclose $($proc.Name) ($($proc.Id)): UNIMPLEMENTED."
+                                Write-Warning "Unable to reopen $($proc.Name) ($($proc.Id)): UNIMPLEMENTED."
                             }
                         }
                         'none'
                         {
-                            Write-Verbose "Doing nothing to process '$($proc.Name) ($($proc.Id))' as action='none'."
+                            Write-Verbose "Doing nothing to process $($proc.Name) ($($proc.Id)): action='none'."
                         }
                         default
                         {
@@ -1411,13 +1436,69 @@ function Invoke-TaskTamer
         return $config
     }
 
-    # =============================================================================
-    # =============================================================================
 
-    # =============================================================================
+    # Function to check if a file is accessible
+    function Wait-ForFileUnlock
+    {
+        param (
+            [Parameter(Mandatory = $true)]
+            [String]$Path,
 
-    # =============================================================================
-    # =============================================================================
+            [int]$TimeoutSeconds = 10
+        )
+
+        $endTime = (Get-Date).AddSeconds($TimeoutSeconds)
+        do
+        {
+            try
+            {
+                # Attempt to open the file in exclusive mode
+                $stream = [System.IO.File]::Open($filePath, 'Open', 'ReadWrite', 'None')
+                $stream.Close()
+                return $true
+            }
+            catch
+            {
+                Start-Sleep -Milliseconds 500
+            }
+        }
+        while ((Get-Date) -lt $endTime)
+
+        return $false
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     if (-not (Initialize-Environment))
     {
@@ -1519,7 +1600,10 @@ function Invoke-TaskTamer
     #Write-Verbose "targetProcessesConfig (merged)..."
     #Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
 
-    if (-not (Start-Lock))
+    # this will be used by Start-Lock to indicate we can ignore -ResumeALl
+    $resumedAll = $false
+
+    if (-not (Start-Lock -ResumedAll ([ref]$resumedAll)))
     {
         return
     }
@@ -1559,10 +1643,17 @@ function Invoke-TaskTamer
 
         if ($ResumeAll)
         {
-            Write-Output "Resuming all processes ('-ResumeAll')..."
-            $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
-            $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
-            Set-TargetProcessesState -Restore -NoDeltas | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+            if (-not $resumedAll)
+            {
+                Write-Host "Resuming all processes ('-ResumeAll')..."
+                $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
+                $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
+                Set-TargetProcessesState -Restore -NoDeltas | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+            }
+            else
+            {
+                Write-Host "Not resuming all processes (despite '-ResumeAll') as we already did it due to stale lockfile"
+            }
         }
 
         # did we sit idle last time around the while() loop?
@@ -1574,11 +1665,11 @@ function Invoke-TaskTamer
             {
                 if ($CheckOnce)
                 {
-                    Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Checking for trigger processes..."
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Checking for trigger processes..."
                 }
                 else
                 {
-                    Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Listening for trigger processes {Press Q to Quit}..."
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Listening for trigger processes {Press Q to Quit}..."
                 }
             }
 
@@ -1642,7 +1733,7 @@ function Invoke-TaskTamer
                                 $numWindowsMinimised = [ProcessManager]::MinimizeProcessWindows($proc.Id)
                                 if ($numWindowsMinimised)
                                 {
-                                    Write-Output "Minimised: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]"
+                                    Write-Host "Minimised: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]"
                                 }
                             }
                             catch
@@ -1674,7 +1765,7 @@ function Invoke-TaskTamer
                 # Wait for the trigger process(es) to exit
                 foreach ($runningTriggerProcess in $runningTriggerProcesses)
                 {
-                    Write-Output "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for trigger process $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) to exit..."
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for trigger process $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id)) to exit..."
 
                     if ($PollTriggers)
                     {
@@ -1748,39 +1839,47 @@ function Invoke-TaskTamer
                 {
                     try
                     {
-                        $ow2ConfigFile = Join-Path -Path ([System.Environment]::GetFolderPath('MyDocuments')) -ChildPath "\Overwatch\Settings\Settings_v0.ini"
-                        Write-Verbose "overwatch2ConfigPatch set. Examining $ow2ConfigFile (in 2s)..."
+                        $ow2ConfigFilePath = Join-Path -Path ([System.Environment]::GetFolderPath('MyDocuments')) -ChildPath "\Overwatch\Settings\Settings_v0.ini"
+                        Write-Verbose "overwatch2_config_patch set. Waiting to write to $ow2ConfigFilePath ..."
+                        Start-Sleep -Seconds 2  # you might be able to remove this
 
-                        # sleep to give extra time for OW2 to save and release lock on the file
-                        Start-Sleep -Seconds 2
-
-                        $contents = Get-Content -Raw -Encoding UTF8 -Path $ow2ConfigFile
-
-                        # normalise line endings to Windows style (shouldn't be necessary)
-                        #$contents = $contents -replace '\r?\n', "`r`n"
-
-                        # (?m) enables multiline mode
-                        # https://learn.microsoft.com/en-us/dotnet/standard/base-types/regular-expression-options#multiline-mode
-                        # but $ will not recognize the carriage return/line feed character combination (\r\n) as $ always ignores any carriage return (\r).
-                        # To end your match with either \r\n or \n, use the subexpression \r?$ instead of just $. Note that this will make the \r part of the match.
-                        $regex = '(?m)^BroadcastMarginLeft\s*=\s*".*?"(\r?)$'
-                        $replacement = 'BroadcastMarginLeft = "1.000000"$1'
-
-                        $newContents = $contents -replace $regex, $replacement
-
-                        if ($contents -ne $newContents)
+                        if (Wait-ForFileUnlock -Path $ow2ConfigFilePath)
                         {
-                            # FIXME: bug w.r.t. ShowIntro = "0" ended up on the ini file repeated times
-                            # but possibly it was caused by writing conflict between Overwatch and this function
-                            Write-Host "**** Patching $ow2ConfigFile to fix 'BroadcastMarginLeft'..."
+                            $contents = Get-Content -Raw -Encoding UTF8 -Path $ow2ConfigFilePath
 
-                            # FIXME: will create a BOM
-                            $newContents | Out-File -Encoding UTF8 -FilePath $ow2ConfigFile
-                            #Set-Content -Path $ow2ConfigFile -Value $newContents -Encoding UTF8
+                            # normalise line endings to Windows style (shouldn't be necessary)
+                            #$contents = $contents -replace '\r?\n', "`r`n"
+
+                            # (?m) enables multiline mode
+                            # https://learn.microsoft.com/en-us/dotnet/standard/base-types/regular-expression-options#multiline-mode
+                            # but $ will not recognize the carriage return/line feed character combination (\r\n) as $ always ignores any carriage return (\r).
+                            # To end your match with either \r\n or \n, use the subexpression \r?$ instead of just $. Note that this will make the \r part of the match.
+                            $regex = '(?m)^BroadcastMarginLeft\s*=\s*".*?"(\r?)$'
+                            $replacement = 'BroadcastMarginLeft = "1.000000"$1'
+
+                            $newContents = $contents -replace $regex, $replacement
+
+                            if ($contents -ne $newContents)
+                            {
+                                # FIXME: bug w.r.t. ShowIntro = "0" ended up on the ini file repeated times
+                                # but possibly it was caused by writing conflict between Overwatch and this function
+                                Write-Host "**** Patching $ow2ConfigFilePath to fix 'BroadcastMarginLeft'..."
+
+                                # Write the updated content back to the file in UTF-8 without BOM
+                                $utf8WithoutBom = New-Object System.Text.UTF8Encoding $false
+                                [System.IO.File]::WriteAllText($ow2ConfigFilePath, $newContents, $utf8WithoutBom)
+
+                                # this doesn't work as PS creates a BOM
+                                #$newContents | Out-File -Encoding UTF8 -FilePath $ow2ConfigFile
+                            }
+                            else
+                            {
+                                Write-Verbose "No patching required"
+                            }
                         }
                         else
                         {
-                            Write-Verbose "No patching required"
+                            Write-Warning "Unable to patch $ow2ConfigFilePath as it remains locked"
                         }
                     }
                     catch
@@ -1800,14 +1899,14 @@ function Invoke-TaskTamer
             {
                 if ($CheckOnce)
                 {
-                    Write-Output "No trigger process detected."
+                    Write-Host "No trigger process detected."
                     break
                 }
             }
 
             if (-not ($wasIdleLastLoop))
             {
-                Write-Output "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds... { Press Q to Quit }"
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds... { Press Q to Quit }"
             }
 
             if (Wait-ForKeyPress -Seconds 3 -KeyCharacter "Q")
@@ -1836,25 +1935,3 @@ function Invoke-TaskTamer
         Reset-Environment
     }
 }
-
-# Define a function to format and show detailed error information
-# FIXME: not working as expected
-<#
-function Show-ErrorDetails
-{
-    param (
-        [Parameter(Mandatory)]
-        [System.Management.Automation.ErrorRecord]$ErrorRecord
-    )
-
-    Write-Host "Error: $($ErrorRecord.Exception.Message)" -ForegroundColor Red
-    Write-Host "Type: $($ErrorRecord.Exception.GetType().FullName)"
-    #Write-Host "Stack Trace:" -ForegroundColor Yellow
-    #Write-Host $ErrorRecord.Exception.StackTrace
-
-    Write-Host "`nPowerShell Call Stack:" -ForegroundColor Cyan
-    Get-PSCallStack | ForEach-Object {
-        Write-Host " - Function: $($_.FunctionName), File: $($_.ScriptName), Line: $($_.ScriptLineNumber)"
-    }
-}
-#>
