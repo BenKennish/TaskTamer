@@ -1444,7 +1444,7 @@ function Invoke-TaskTamer
             [Parameter(Mandatory = $true)]
             [String]$Path,
 
-            [int]$TimeoutSeconds = 10
+            [int]$TimeoutSeconds = 30
         )
 
         $endTime = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -1453,12 +1453,36 @@ function Invoke-TaskTamer
             try
             {
                 # Attempt to open the file in exclusive mode
-                $stream = [System.IO.File]::Open($filePath, 'Open', 'ReadWrite', 'None')
+                # Opens file, in read-write mode, no sharing allowed
+                $stream = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
+
                 $stream.Close()
                 return $true
             }
+            catch [System.IO.FileNotFoundException]
+            {
+                Write-Host "Error: The file $Path was not found." -ForegroundColor DarkRed
+                break
+            }
+            catch [System.UnauthorizedAccessException]
+            {
+                Write-Host "Error: You do not have permission to access $Path." -ForegroundColor DarkRed
+                break
+            }
+            catch [System.ArgumentException]
+            {
+                Write-Host $_
+                Write-Host "Error: The file path is invalid." -ForegroundColor DarkRed
+                break
+            }
+            catch [System.IO.IOException]
+            {
+                Write-Host "Error: The file is already in use."
+                Start-Sleep -Milliseconds 500
+            }
             catch
             {
+                Write-Host "Unexpected error: $_"
                 Start-Sleep -Milliseconds 500
             }
         }
@@ -1652,35 +1676,26 @@ function Invoke-TaskTamer
             }
             else
             {
-                Write-Host "Not resuming all processes (despite '-ResumeAll') as we already did it due to stale lockfile"
+                Write-Verbose "Ignoring -ResumeAll as we already did it due to stale lockfile"
             }
         }
 
-        # did we sit idle last time around the while() loop?
-        $wasIdleLastLoop = $false
+        if ($CheckOnce)
+        {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Checking for trigger processes..."
+        }
+        else
+        {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Listening for trigger processes {Press Q to Quit}..."
+        }
 
         while ($true)
         {
-            if (-not ($wasIdleLastLoop))
-            {
-                if ($CheckOnce)
-                {
-                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Checking for trigger processes..."
-                }
-                else
-                {
-                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Listening for trigger processes {Press Q to Quit}..."
-                }
-            }
-
-            $wasIdleLastLoop = $true
-
             # NB: hashtables are case insensitive w.r.t. their keys by default
             $runningTriggerProcesses = Get-Process | Where-Object { $config['trigger_processes'].ContainsKey($_.Name) }
 
             if ($runningTriggerProcesses)
             {
-                $wasIdleLastLoop = $false
                 $launcher = ""
 
                 foreach ($runningTriggerProcess in $runningTriggerProcesses)
@@ -1689,7 +1704,7 @@ function Invoke-TaskTamer
 
                     if (-not $runningTriggerProcess.PriorityBoostEnabled)
                     {
-                        Write-Warning "This trigger process is not runining with PriorityBoost enabled"
+                        Write-Warning "This trigger process is not running with PriorityBoost enabled"
                     }
 
                     if ($config['show_notifications'])
@@ -1717,7 +1732,7 @@ function Invoke-TaskTamer
 
                 # Minimise windows of all target processes
                 # FIXME: doesn't work for certain apps (e.g. Microsoft Store apps like WhatsApp)
-                Write-Host "**** Minimising target process windows..."
+                Write-Host "**** Minimizing target process windows..."
 
 
                 foreach ($proc in Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) -and $targetProcessesConfig[$_.Name]['minimize'] })
@@ -1733,18 +1748,18 @@ function Invoke-TaskTamer
                                 $numWindowsMinimised = [ProcessManager]::MinimizeProcessWindows($proc.Id)
                                 if ($numWindowsMinimised)
                                 {
-                                    Write-Host "Minimised: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]"
+                                    Write-Host "Minimized: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]" -ForegroundColor Cyan
                                 }
                             }
                             catch
                             {
-                                Write-Verbose "Error minimising windows for PID $($proc.ID): $_"
+                                Write-Verbose "Error minimizing windows for PID $($proc.ID): $_"
                             }
                         }
                     }
                     catch
                     {
-                        Write-Error "!!!! Failed to minimise: $($proc.Name) ($($proc.Id)). Error: $_";
+                        Write-Error "!!!! Failed to minimize: $($proc.Name) ($($proc.Id)). Error: $_";
                     }
                 }
 
@@ -1840,11 +1855,12 @@ function Invoke-TaskTamer
                     try
                     {
                         $ow2ConfigFilePath = Join-Path -Path ([System.Environment]::GetFolderPath('MyDocuments')) -ChildPath "\Overwatch\Settings\Settings_v0.ini"
-                        Write-Verbose "overwatch2_config_patch set. Waiting to write to $ow2ConfigFilePath ..."
+                        Write-Host "overwatch2_config_patch set. Waiting for write lock to $ow2ConfigFilePath ..."
                         Start-Sleep -Seconds 2  # you might be able to remove this
 
                         if (Wait-ForFileUnlock -Path $ow2ConfigFilePath)
                         {
+                            Write-Host "File unlocked.  Checking for 'BroadcastMarginLeft'..."
                             $contents = Get-Content -Raw -Encoding UTF8 -Path $ow2ConfigFilePath
 
                             # normalise line endings to Windows style (shouldn't be necessary)
@@ -1863,18 +1879,15 @@ function Invoke-TaskTamer
                             {
                                 # FIXME: bug w.r.t. ShowIntro = "0" ended up on the ini file repeated times
                                 # but possibly it was caused by writing conflict between Overwatch and this function
-                                Write-Host "**** Patching $ow2ConfigFilePath to fix 'BroadcastMarginLeft'..."
+                                Write-Host "**** Patching $ow2ConfigFilePath to fix 'BroadcastMarginLeft'..." -ForegroundColor Cyan
 
                                 # Write the updated content back to the file in UTF-8 without BOM
                                 $utf8WithoutBom = New-Object System.Text.UTF8Encoding $false
                                 [System.IO.File]::WriteAllText($ow2ConfigFilePath, $newContents, $utf8WithoutBom)
-
-                                # this doesn't work as PS creates a BOM
-                                #$newContents | Out-File -Encoding UTF8 -FilePath $ow2ConfigFile
                             }
                             else
                             {
-                                Write-Verbose "No patching required"
+                                Write-Host "No patching required"
                             }
                         }
                         else
@@ -1894,24 +1907,27 @@ function Invoke-TaskTamer
                 {
                     break
                 }
+
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds... { Press Q to Quit }"
+                if (Wait-ForKeyPress -Seconds 3 -KeyCharacter "Q")
+                {
+                    break # out of while()
+                }
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Listening for trigger processes {Press Q to Quit}..."
             }
             else
             {
+                # no trigger processes detected
                 if ($CheckOnce)
                 {
-                    Write-Host "No trigger process detected."
+                    Write-Host "No trigger process was detected."
                     break
                 }
-            }
 
-            if (-not ($wasIdleLastLoop))
-            {
-                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds... { Press Q to Quit }"
-            }
-
-            if (Wait-ForKeyPress -Seconds 3 -KeyCharacter "Q")
-            {
-                break # out of while()
+                if (Wait-ForKeyPress -Seconds 3 -KeyCharacter "Q")
+                {
+                    break # out of while()
+                }
             }
         }
     }
