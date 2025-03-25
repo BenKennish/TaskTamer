@@ -31,6 +31,7 @@ Open a Windows PowerShell terminal (hit the Windows Key on keyboard, type "windo
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
 Install-Module -Name TaskTamer -Scope CurrentUser
 ```
 
