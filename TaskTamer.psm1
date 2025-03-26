@@ -9,6 +9,12 @@ you can manually import this module using:
 
 ----------- TODO list --------------
 
+TODO: rename to AutoTaskTamer (ATT)?
+
+TODO: get window minimising working for WhatsApp and other Store apps, and restore all windows that were minimized when the trigger process ran
+
+TODO: get the grouped processes mode (default) working better w.r.t. output
+
 TODO: allow a list of NON-target processes, i.e. TaskTamer should target all OTHER processes
        (running as the user, won't include SYSTEM processes)
        NOTE: very likely to suspend things that will cause problems tho
@@ -44,8 +50,6 @@ TODO: allow filtering by process cmd line args
 e.g. for Minecraft "jawaw".exe look for "*minecraft*"" in the cmd line args
 
 TODO: display action taken in a column of the table, e.g. 'suspended', 'deprioritized', 'closed'
-
-TODO: restore all windows that were minimized when the trigger process ran
 
 #>
 
@@ -164,7 +168,9 @@ function Invoke-TaskTamer
         param
         (
             [ValidateScript({ $_.Value -is [bool] })]
-            [ref]$ResumedAll
+            [ref]$ResumedAll  # pass by reference var that we set to true if we resume all processes
+
+            # NB: we can't just use exit instead of return from this function as it would terminate the whole shell and not just the Invoke-TaskTamer call
         )
 
         $ResumedAll.Value = $false
@@ -174,10 +180,35 @@ function Invoke-TaskTamer
             $pidInLockFile = Get-Content -Path $lockFilePath
             Write-Verbose "Lock file exists and contains '$($pidInLockFile)'"
 
-            if ($pidInLockFile -and
-                    (($pidInLockFile -eq $PID) -or
-                -not (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue)))
+            if ($pidInLockFile)
             {
+                if ($pidInLockFile -eq $PID)
+                {
+                    # we are the process that created the lock file. bit weird but we continue
+                    Write-Verbose "Lock file contains our own PID.  Continuing..."
+                    return $true
+                }
+
+                $procName = (Get-Process -Id $pidInLockFile -ErrorAction SilentlyContinue).ProcessName
+
+                if ($null -eq $procName)
+                {
+                    # no process with that PID is running
+                    Write-Verbose "Lock file contains stale PID."
+                }
+                elseif ($procName -in ('powershell', 'pwsh'))
+                {
+                    # an instance of powershell is running with this PID so it's probably running TaskTamer
+                    Write-Host "TaskTamer is already running.  Exiting in 3s..." -ForegroundColor Red
+                    Start-Sleep -Seconds 3
+                    return $false
+                }
+                else
+                {
+                    # else something else non PowerShell-y is running with that PID
+                    Write-Verbose "Lock file PID is for process $($procName), not 'powershell' or 'pwsh'"
+                }
+
                 Write-Host "Previous TaskTamer didn't close properly.  Assuming crash and resuming all processes..."
 
                 $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
@@ -187,12 +218,7 @@ function Invoke-TaskTamer
                 $ResumedAll.Value = $true
 
                 Remove-Item -Path $lockFilePath -Force
-            }
-            else
-            {
-                Write-Host "TaskTamer is already running.  Exiting in 3s..." -ForegroundColor Red
-                Start-Sleep -Seconds 3
-                return $false
+
             }
         }
         return $true
@@ -788,20 +814,24 @@ function Invoke-TaskTamer
         $unitIndex = 0
 
         # TODO: you could make this standardised using different powers of 10
-        if ([Math]::Abs($bytes) -ge 1024 * 1024)  # >= 1MB
+        if ([Math]::Abs($bytes) -ge 1024 * 1024)
         {
+            # >= 1MB
             $unitIndex++
         }
-        if ([Math]::Abs($bytes) -ge 10 * 1024 * 1024) # >= 10MB
+        if ([Math]::Abs($bytes) -ge 10 * 1024 * 1024)
         {
+            # >= 10MB
             $unitIndex++
         }
-        if ([Math]::Abs($bytes) -ge 100 * 1024 * 1024) # >= 100MB
+        if ([Math]::Abs($bytes) -ge 100 * 1024 * 1024)
         {
+            # >= 100MB
             $unitIndex++
         }
-        if ([Math]::Abs($bytes) -ge 1024 * 1024 * 1024) # >= 1GB
+        if ([Math]::Abs($bytes) -ge 1024 * 1024 * 1024)
         {
+            # >= 1GB
             $unitIndex++
         }
 
@@ -916,8 +946,9 @@ function Invoke-TaskTamer
                 # if this process has a different name to the last one
                 if ($proc.Name -ne $lastProcessName)
                 {
-                    if ($lastProcessName -ne "")   # if this isn't the very first process
+                    if ($lastProcessName -ne "")
                     {
+                        # if this isn't the very first process
                         # display subtotal for the previous group of processes with the same name
                         if ($lastProcessName -eq $Launcher)
                         {
@@ -1624,11 +1655,12 @@ function Invoke-TaskTamer
     #Write-Verbose "targetProcessesConfig (merged)..."
     #Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
 
-    # this will be used by Start-Lock to indicate we can ignore -ResumeALl
+    # this will be used by Start-Lock to indicate we can ignore -ResumeAll
     $resumedAll = $false
 
     if (-not (Start-Lock -ResumedAll ([ref]$resumedAll)))
     {
+        # if we failed to grab the lock
         return
     }
 
