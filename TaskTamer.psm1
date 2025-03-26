@@ -9,7 +9,7 @@ you can manually import this module using:
 
 ----------- TODO list --------------
 
-TODO: rename to AutoTaskTamer (ATT)?
+TODO: consider rename to AutoTaskTamer (ATT)
 
 TODO: get window minimising working for WhatsApp and other Store apps, and restore all windows that were minimized when the trigger process ran
 
@@ -24,6 +24,7 @@ TODO: if user tries to focus any suspended target process (before game has been 
       as it can require repeatedly polling in a while() loop
       OR
       perhaps just detect when a game loses focus and then restore everything and tame them when it gains focus again
+      (probably not a good idea in case the game has performance issues and temporarily loses focus)
       OR
       they could just manually ctrl-C the script and then run it again before restoring the game app
 
@@ -127,6 +128,13 @@ function Invoke-TaskTamer
         [switch]$WhatIf
     )
 
+    Set-Variable -Name COLUMN_HEADINGS -Option Constant -Value @("NAME", "PID", "RAM", "ACTION", "WINDOW")
+    Set-Variable -Name COLUMN_FORMATS  -Option Constant -Value @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
+
+    Set-Variable -Name COLUMN_HEADINGS_WITH_RAM_DELTA -Option Constant -Value @("NAME", "PID", "RAM", "ΔRAM", "ACTION", "WINDOW")
+    Set-Variable -Name COLUMN_FORMATS_WITH_RAM_DELTA -Option Constant -Value @("{0,-17}", " {0,-6}", "{0,10}", "{0,11}", "{0,-13}", "{0,-20}")
+
+    # TODO: i could make these constants too probably
     $moduleManifestPath = Join-Path -Path $PSScriptRoot -ChildPath "$(Split-Path -Leaf $PSScriptRoot).psd1"
     $moduleData = Import-PowerShellDataFile -Path $moduleManifestPath
     $Version = $moduleData.ModuleVersion
@@ -211,10 +219,8 @@ function Invoke-TaskTamer
 
                 Write-Host "Previous TaskTamer didn't close properly.  Assuming crash and resuming all processes..."
 
-                $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
-                $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
                 Set-TargetProcessesState -Restore -NoDeltas |
-                Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+                Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS -ColumnFormats $COLUMN_FORMATS
                 $ResumedAll.Value = $true
 
                 Remove-Item -Path $lockFilePath -Force
@@ -1538,23 +1544,6 @@ function Invoke-TaskTamer
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     if (-not (Initialize-Environment))
     {
         return
@@ -1702,9 +1691,7 @@ function Invoke-TaskTamer
             if (-not $resumedAll)
             {
                 Write-Host "Resuming all processes ('-ResumeAll')..."
-                $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
-                $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
-                Set-TargetProcessesState -Restore -NoDeltas | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+                Set-TargetProcessesState -Restore -NoDeltas | Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS -ColumnFormats $COLUMN_FORMATS
             }
             else
             {
@@ -1799,10 +1786,8 @@ function Invoke-TaskTamer
                 Start-Sleep -Milliseconds 250
 
                 Write-Host "**** Taming target processes..."
-                $columnHeadings = @("NAME", "PID", "RAM", "ACTION", "WINDOW")
-                $columnFormats = @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
 
-                Set-TargetProcessesState -Throttle -Launcher $launcher | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+                Set-TargetProcessesState -Throttle -Launcher $launcher | Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS -ColumnFormats $COLUMN_FORMATS
 
                 if ($PollTriggers)
                 {
@@ -1869,10 +1854,7 @@ function Invoke-TaskTamer
                 # this isn't a priority to fix
 
                 Write-Host "**** Restoring target processes..."
-
-                $columnHeadings = @("NAME", "PID", "RAM", "ΔRAM", "ACTION", "WINDOW")
-                $columnFormats = @("{0,-17}", " {0,-6}", "{0,10}", "{0,11}", "{0,-13}", "{0,-20}")
-                Set-TargetProcessesState -Restore -Launcher $launcher | Format-TableFancy -ColumnHeadings $columnHeadings -ColumnFormats $columnFormats
+                Set-TargetProcessesState -Restore -Launcher $launcher | Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS_WITH_RAM_DELTA -ColumnFormats $COLUMN_FORMATS_WITH_RAM_DELTA
 
                 $suspendedProcesses = $false
 
