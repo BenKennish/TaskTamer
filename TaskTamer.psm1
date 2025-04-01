@@ -857,6 +857,7 @@ function Invoke-TaskTamer
         [CmdletBinding(DefaultParameterSetName = 'Throttle')]
         param (
             [string]$Launcher = "",
+            [switch]$NoOutput, # set if we shouldn't produce any output (Write-Output cannot be used during shutdown)
 
             [Parameter(ParameterSetName = 'Throttle', Mandatory = $true)]
             [switch]$Throttle,
@@ -896,9 +897,13 @@ function Invoke-TaskTamer
             # this might result in trying to resume new processes that weren't suspended (by us)
             # (probably doesn't matter but it's not very elegant)
 
+            # TODO: maybe group into processes that have the same name and operate on each group
+            #
+            # we ignore those in session 0 (the "system session") as we likely cannot do anything with processes in this session
+            # and any other sessions
+            # (we could check to see if we are running as Adminsitrator tho)
 
-            # TODO: group into processes that have the same name
-            $runningTargetProcesses = Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) }
+            $runningTargetProcesses = Get-Process | Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) -and $targetProcessesConfig.ContainsKey($_.Name) }
 
             foreach ($proc in $runningTargetProcesses)
             {
@@ -952,6 +957,8 @@ function Invoke-TaskTamer
                 # if this process has a different name to the last one
                 if ($proc.Name -ne $lastProcessName)
                 {
+                    if (-not $NoOutput)
+                {
                     if ($lastProcessName -ne "")
                     {
                         # if this isn't the very first process
@@ -975,6 +982,7 @@ function Invoke-TaskTamer
                                 -SameProcessRamDeltaTotal $sameProcessRamDeltaTotal
                         }
 
+                        }
                     }
 
                     # store info on this new process name group
@@ -1027,7 +1035,7 @@ function Invoke-TaskTamer
                         )
                     }
 
-                    if (-not $targetProcessesConfig[$proc.Name]['show_subtotal_only'])
+                    if (-not $targetProcessesConfig[$proc.Name]['show_subtotal_only'] -and -not $NoOutput)
                     {
                         Write-Output -NoEnumerate $row
                     }
@@ -1067,7 +1075,7 @@ function Invoke-TaskTamer
                         [PSCustomObject] @{ Data = $windowTitle }
                     )
                 }
-                if (-not $targetProcessesConfig[$proc.Name]['show_subtotal_only'])
+                if (-not $targetProcessesConfig[$proc.Name]['show_subtotal_only'] -and -not $NoOutput)
                 {
                     Write-Output -NoEnumerate $row
                 }
@@ -1160,6 +1168,8 @@ function Invoke-TaskTamer
             }
 
             # write subtotal row for the last process group (if there were >1 processes)
+            if (-not $NoOutput)
+            {
             if ($lastProcessName -eq $Launcher)
             {
                 Write-Subtotal `
@@ -1202,6 +1212,7 @@ function Invoke-TaskTamer
                     [PSCustomObject] @{ Data = "" }
                 )
                 Write-Output -NoEnumerate $row
+                }
             }
 
         }
