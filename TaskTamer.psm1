@@ -1,4 +1,4 @@
-﻿<#
+<#
 TaskTamer
    A PowerShell project by Ben Kennish (ben@kennish.net)
 
@@ -1830,6 +1830,17 @@ function Invoke-TaskTamer
 
                     # FIXME: if there is more than one trigger process running, we will checking the memory stats of them in order
                     # and once the first exits, the others might exit too and their stats will be invalid
+                    }
+                }
+                else
+                {
+                    # wait for all trigger processes
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Waiting for all trigger processes to exit..."
+
+                    # old way of doing it that cannot be broken out of with Ctrl-C
+                    #$runningTriggerProcess.WaitForExit()
+
+                    $runningTriggerProcesses | Wait-Process
                 }
 
                 Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** All trigger processes have exited"
