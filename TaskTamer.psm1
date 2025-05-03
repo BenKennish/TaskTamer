@@ -128,10 +128,10 @@ function Invoke-TaskTamer
         [switch]$WhatIf
     )
 
-    Set-Variable -Name COLUMN_HEADINGS -Option Constant -Value @("NAME", "PID", "RAM", "ACTION", "WINDOW")
+    Set-Variable -Name COLUMN_HEADINGS -Option Constant -Value @("NAME", "PID", "RAM", "ACTION", "DETAILS")
     Set-Variable -Name COLUMN_FORMATS  -Option Constant -Value @("{0,-17}", "{0,-6}", "{0,10}", "{0,-13}", "{0,-20}")
 
-    Set-Variable -Name COLUMN_HEADINGS_WITH_RAM_DELTA -Option Constant -Value @("NAME", "PID", "RAM", "ΔRAM", "ACTION", "WINDOW")
+    Set-Variable -Name COLUMN_HEADINGS_WITH_RAM_DELTA -Option Constant -Value @("NAME", "PID", "RAM", "ΔRAM", "ACTION", "DETAILS")
     Set-Variable -Name COLUMN_FORMATS_WITH_RAM_DELTA -Option Constant -Value @("{0,-17}", " {0,-6}", "{0,10}", "{0,11}", "{0,-13}", "{0,-20}")
 
     # Are there some processes that we suspended and have yet to resume?
@@ -1565,6 +1565,14 @@ function Invoke-TaskTamer
 
         return $false
     }
+
+
+
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+
 
 
     $runningTriggerProcesses = @()

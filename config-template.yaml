@@ -12,7 +12,7 @@ target_process_defaults:
     # main action to take. valid values: suspend, deprioritize, close, none
 
     minimize: true
-    # minimizes all windows belonging to the target process.
+    # minimizes all windows belonging to the target process before taking the above action
 
     trim_working_set: false
     # trims the RAM (working set) of the target process. although this can free
