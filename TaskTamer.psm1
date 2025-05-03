@@ -952,6 +952,12 @@ function Invoke-TaskTamer
                     continue
                 }
 
+                # ignore launcher processes completely when resuming
+                if ($Restore -and $proc.Name -eq $Launcher)
+                {
+                    continue
+                }
+
                 if ($Throttle)
                 {
                     # store current RAM usage for this PID before we suspend it
@@ -959,10 +965,19 @@ function Invoke-TaskTamer
                     $processHistory[$proc.Id].workingSet = $proc.WorkingSet64
                 }
 
-                # ignore launcher processes completely when resuming
-                if ($Restore -and $proc.Name -eq $Launcher)
+                # retrieve the last working set for this process (or 0 if we haven't seen it before)
+                if (-not $NoDeltas)
                 {
-                    continue
+                    $lastWorkingSet = 0
+
+                    if ($processHistory[$proc.Id] -and $processHistory[$proc.Id].workingSet)
+                    {
+                        $lastWorkingSet = $processHistory[$proc.Id].workingSet
+                    }
+                    else
+                    {
+                        Write-Warning "$($proc.Name) ($($proc.Id)) not seen before.  Setting lastWorkingSet to 0."
+                    }
                 }
 
                 # if this process has a different name to the last one
@@ -1003,7 +1018,8 @@ function Invoke-TaskTamer
 
                     if (-not $NoDeltas)
                     {
-                        $sameProcessRamDeltaTotal = $proc.WorkingSet64 - ($processHistory[$proc.Id].workingSet)
+
+                        $sameProcessRamDeltaTotal = $proc.WorkingSet64 - $lastWorkingSet
                     }
                 }
                 else
@@ -1014,7 +1030,7 @@ function Invoke-TaskTamer
 
                     if (-not $NoDeltas)
                     {
-                        $sameProcessRamDeltaTotal += ($proc.WorkingSet64 - $processHistory[$proc.Id].workingSet)
+                        $sameProcessRamDeltaTotal += ($proc.WorkingSet64 - $lastWorkingSet)
                     }
                 }
 
@@ -1056,7 +1072,7 @@ function Invoke-TaskTamer
                 $totalRamUsage += $proc.WorkingSet64
                 if (-not $NoDeltas)
                 {
-                    $totalRamDelta += ($proc.WorkingSet64 - $processHistory[$proc.Id].workingSet)
+                    $totalRamDelta += ($proc.WorkingSet64 - $lastWorkingSet)
                 }
 
                 $windowTitle = ""
@@ -1081,7 +1097,7 @@ function Invoke-TaskTamer
                         [PSCustomObject] @{ Data = $proc.Name },
                         [PSCustomObject] @{ Data = $proc.Id },
                         [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes $proc.WorkingSet64) },
-                        [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes ($proc.WorkingSet64 - $processHistory[$proc.id].workingSet) -DisplayPlus); ForegroundColor = (Get-BytesColour -Bytes ($proc.WorkingSet64 - $processHistory[$proc.id].workingSet) -NegativeIsPositive) },
+                        [PSCustomObject] @{ Data = (ConvertTo-HumanReadable -Bytes ($proc.WorkingSet64 - $lastWorkingSet) -DisplayPlus); ForegroundColor = (Get-BytesColour -Bytes ($proc.WorkingSet64 - $lastWorkingSet) -NegativeIsPositive) },
                         [PSCustomObject] @{ Data = $targetProcessesConfig[$proc.Name]['action'] },
                         [PSCustomObject] @{ Data = $windowTitle }
                     )
