@@ -782,7 +782,7 @@ function Invoke-TaskTamer
 
                 $row += @(
                     [PSCustomObject] @{ Data = "Ignored" ; ForegroundColor = "DarkGray"; },
-                    [PSCustomObject] @{ Data = "" }
+                    [PSCustomObject] @{ Data = "Launcher" }
                 )
 
             }
