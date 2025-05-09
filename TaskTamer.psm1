@@ -9,6 +9,38 @@ you can manually import this module using:
 
 ----------- TODO list --------------
 
+
+Desired output:
+
+Throttling....
+
+Process  | PID   | RAM   | ACTION        | DETAILS
+-------------------------------------------------------------
+brave    | TOTAL | 5.2GB | suspended     |
+explorer | TOTAL | 1.2GB | deprioritised | Normal -> BelowNormal
+Signal   | TOTAL | 1.2GB | closed        | Failed - unimplemented
+steam    | TOTAL | 0.8GB | ignored       | Launcher for GW2-64
+
+or maybe:
+
+Process  | RAM   | ACTION        | DETAILS
+-------------------------------------------------------------
+brave    | 5.2GB | suspended     | err PID 1234
+explorer | 1.2GB | deprioritised | Normal -> BelowNormal
+Signal   | 1.2GB | closed        | Failed - unimplemented
+steam    | 0.8GB | ignored       | Launcher for GW2-64
+
+
+Restoring....
+Process  | PID   | RAM   | ΔRAM   | ACTION        | DETAILS
+-------------------------------------------------------------
+brave    | TOTAL | 5.0GB | -200MB | unsuspended   |
+explorer | TOTAL | 1.2GB |        | reprioritised | BelowNormal -> Normal
+Signal   | TOTAL | 1.2GB |        | opened        | Failed - unimplemented
+steam    | TOTAL | 0.8GB |        | ignored       | Launcher for GW2-64
+
+TODO: Hide PID column when collapsing processes by name
+
 TODO: consider rename to AutoTaskTamer (ATT)
 
 TODO: get window minimising working for WhatsApp and other Store apps, and restore all windows that were minimized when the trigger process ran
