@@ -39,6 +39,8 @@ explorer | TOTAL | 1.2GB |        | reprioritised | BelowNormal -> Normal
 Signal   | TOTAL | 1.2GB |        | opened        | Failed - unimplemented
 steam    | TOTAL | 0.8GB |        | ignored       | Launcher for GW2-64
 
+TODO: target_processes_override currently only works at the first depth level of the hashmap.   e.g. if there is an entry in there for 'Solitaire', it won't merge
+
 TODO: Hide PID column when collapsing processes by name
 
 TODO: consider rename to AutoTaskTamer (ATT)
@@ -1483,8 +1485,11 @@ function Invoke-TaskTamer
 
 
     # merge two hashmaps into a new one
+    # but any keys that start with '-' instruct us to remove that key from the returned hashmap
+    # (in PowerShell 7 we might just use the '+' operator)
     #
-    # in PowerShell 7 we'd just use the '+' operator
+    # MaxDepth is used to limit the maximum depth of merging for nested hashtables
+    #
     function Merge-Hashmaps
     {
         param (
@@ -1493,7 +1498,9 @@ function Invoke-TaskTamer
 
             [Parameter(Mandatory = $true)]
             [AllowNull()]
-            [Hashtable]$Override
+            [Hashtable]$Override,
+
+            [int]$MaxDepth = 0
         )
 
         # necessary as Hashtables are passed by reference
@@ -1503,9 +1510,45 @@ function Invoke-TaskTamer
         {
             foreach ($key in $Override.Keys)
             {
-                $merged[$key] = $Override[$key]
+                if ($key -like '-*')
+                {
+                    if ($null -ne $Override[$key])
+                    {
+                        throw "Merge-Hashmaps: Contents of the removal key '$key' in Override hashmap is not null."
+                    }
+
+                    # remove the key from the merged hashtable
+                    $key = $key.TrimStart('-')
+
+                    if ($merged.ContainsKey($key))
+                    {
+                        Write-Verbose "Merge-Hashmaps: Removing key '$key' from hashtable as instructed by Override with '-$key' key"
+                        $merged.Remove($key)
+                    }
+                    else
+                    {
+                        Write-Verbose "Merge-Hashmaps: Override instructed removal of '$key' key from hashtable but it's not present in Default"
+                    }
+                }
+                else
+                {
+                    # not a '-xxxx' key
+
+                    # if we are allowed to go deeper and the key is a hashtable in both Default and Override
+                    if ($MaxDepth -gt 0 -and $merged.ContainsKey($key) -and $merged[$key] -is [Hashtable] -and $Override[$key] -is [Hashtable])
+                    {
+                        Write-Verbose "Merge-Hashmaps: Recursing to merge the two hashtables at key '$key'..."
+                        $merged[$key] = Merge-Hashmaps -Default $merged[$key] -Override $Override[$key] -MaxDepth ($MaxDepth - 1)
+                    }
+                    else
+                    {
+                        # otherwise just a standard copy
+                        $merged[$key] = $Override[$key]
+                    }
+                }
             }
         }
+
         return $merged
     }
 
@@ -1537,7 +1580,7 @@ function Invoke-TaskTamer
 
         # build merged config hashtable for target processes using defaults
         $config['target_processes'].Keys | ForEach-Object {
-            $targetProcessesConfig[$_] = Merge-Hashmaps -Default $config['target_process_defaults'] -Override $config['target_processes'][$_]
+            $targetProcessesConfigGlobal[$_] = Merge-Hashmaps -Default $config['target_process_defaults'] -Override $config['target_processes'][$_]
         }
 
         return $config
@@ -1699,8 +1742,22 @@ function Invoke-TaskTamer
         New-Item -Path $appDataPath -ItemType Directory | Out-Null
     }
 
-    $targetProcessesConfig = @{}
+    $targetProcessesConfigGlobal = @{}
+    # BADHACK: the global variable $targetProcesssesConfig is updated within Read-ConfigFile,
     $config = Read-ConfigFile
+
+    Write-Verbose '=== $config ==='
+    Write-Verbose ($config | ConvertTo-Yaml)
+
+    # points to the same object as the global config to start with
+    $targetProcessesConfig = $targetProcessesConfigGlobal
+
+    Write-Verbose '=== $targetProcessesConfig ==='
+    Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
+
+    # make a copy of this to return to when the trigger processes have exited to restore the original state.
+    #$targetProcessesConfigGlobal = $targetProcessesConfig.Clone()
+
     #Write-Verbose "targetProcessesConfig (merged)..."
     #Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
 
@@ -1714,13 +1771,13 @@ function Invoke-TaskTamer
     }
 
 
+    # build a hashtable of launchers from the config
     $launchers = @{}
-    $targetProcessesConfig.Keys | Where-Object { $targetProcessesConfig[$_]['is_launcher'] -eq $true } | ForEach-Object { $launchers[$_] = $_ }
+    $targetProcessesConfigGlobal.Keys | Where-Object { $targetProcessesConfigGlobal[$_]['is_launcher'] -eq $true } | ForEach-Object { $launchers[$_] = $_ }
     # TODO: set the value to a nice descriptive name for the launcher?
 
-    Write-Verbose '$launchers :'
+    Write-Verbose '=== $launchers ==='
     Write-Verbose ($launchers | ConvertTo-Json)
-
 
     if ($config['show_notifications'])
     {
@@ -1768,11 +1825,16 @@ function Invoke-TaskTamer
 
         while ($true)
         {
-            # NB: hashtables are case insensitive w.r.t. their keys by default
+            # NB: hashtables are case INsensitive w.r.t. their keys by default
             $runningTriggerProcesses = Get-Process | Where-Object { $config['trigger_processes'].ContainsKey($_.Name) }
 
             if ($runningTriggerProcesses)
             {
+                # point to the global target processes config, if we need to alter it (the trigger processes' config 'target_process_overrides' specifies to do so), we will clone it before doing so
+                $targetProcessesConfig = $targetProcessesConfigGlobal
+
+                $processedTargetProcessOverridesFor = @{}
+
                 foreach ($runningTriggerProcess in $runningTriggerProcesses)
                 {
                     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id))" -ForegroundColor Cyan
@@ -1793,7 +1855,64 @@ function Invoke-TaskTamer
                         Write-Host "**** Detected running using launcher '$launcher' ($($launchers[$launcher]))"
                         #TODO: insert launcher specific configuration/optimisation here?
                     }
+
+                    if (-not ($processedTargetProcessOverridesFor[$runningTriggerProcess.Name]) -and $config['trigger_processes'][$runningTriggerProcess.Name].ContainsKey('target_process_overrides'))
+                    {
+                        Write-Host "**** Applying target process overrides for running trigger process '$($runningTriggerProcess.Name)': " + `
+                        ($config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'].Keys -join ", ") -ForegroundColor Cyan
+
+                        # if $targetProcessesConfig is still a pointer to the same object as $targetProcessesConfigGlobal
+                        if ($targetProcessesConfig -eq $targetProcessesConfigGlobal)
+                        {
+                            # clone it before we start changing it
+                            Write-Debug "Clone copying `$targetProcessesConfigGlobal as `$targetProcessesConfig"
+                            $targetProcessesConfig = $targetProcessesConfigGlobal.Clone()
+                        }
+
+                        try
+                        {
+                            # for any processes defined in the target_process_overrides that aren't already in $targetProcessesConfig (i.e. not listed in target_processes)
+                            # we need to incorporate target_process_defaults first
+
+                            $config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'].GetEnumerator() | Where-Object {
+                                # filter out 'removal' keys and process names we already have (because they were in target_processes)
+                                ($_.'Key' -notlike '-*') -and
+                                (-not $targetProcessesConfig.ContainsKey($_.'Key'))
+                            } | ForEach-Object {
+                                # $_.Key corresponds to the process name
+                                # $_.Value correspond to the override config hashtable
+
+                                Write-Host "Target process override specified for '$($_.Key)' is " -ForegroundColor Cyan
+                                $targetProcessesConfig[$_.Key] = Merge-Hashmaps -Default $config['target_process_defaults'] -Override $_.Value
+                            }
+
+                            <#
+                            Write-Verbose "--- `$config['trigger_processes'][$($runningTriggerProcess.Name)]['target_process_overrides'] ---"
+                            Write-Verbose ($config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'] | ConvertTo-Yaml)
+                            #>
+
+                            $targetProcessesConfig = Merge-Hashmaps -Default $targetProcessesConfig -Override $config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'] -MaxDepth 1
+                        }
+                        catch
+                        {
+                            throw "Failed to apply target process overrides for $($runningTriggerProcess.Name): $_"
+                        }
+
+                        $processedTargetProcessOverridesFor[$runningTriggerProcess.Name] = $true
+                    }
+                    else
+                    {
+                        Write-Verbose "No target process overrides to process for $($runningTriggerProcess.Name)"
+                    }
                 }
+
+                # output $targetProcessesConfig for debugging
+                if ($processedTargetProcessOverridesFor.Keys.Count -gt 0)
+                {
+                    Write-Verbose "`$targetProcessesConfig (resolved for current trigger processes)..."
+                    Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
+                }
+
 
                 if ($config['low_priority_waiting'])
                 {
@@ -1809,10 +1928,8 @@ function Invoke-TaskTamer
                 # FIXME: doesn't work for certain apps (e.g. Microsoft Store apps like WhatsApp)
                 Write-Host "**** Minimizing target process windows..."
 
-
-                foreach ($proc in Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) -and $targetProcessesConfig[$_.Name]['minimize'] })
+                foreach ($proc in Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) -and $targetProcessesConfig[$_.Name]['minimize'] } )
                 {
-
                     try
                     {
                         $numWindowsMinimised = 0;

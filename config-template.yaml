@@ -48,7 +48,7 @@ target_processes:
         action: close
 
     "Explorer":
-        action: deprioritize
+        action: none
         minimize: false
 
     # game launchers to be throttled
@@ -64,24 +64,25 @@ target_processes:
 # to act as triggers (e.g. video games)
 trigger_processes:
     "FortniteClient-Win64-Shipping":
-        target_process_overrides: # custom target processes (UNIMPLEMENTED)
-            - name: +WindowsTerminal # also target WindowsTerminal for Fortnite
-              minimize: true
-            # use + / - to add or remove target processes
-
     "RocketLeague":
     "Overwatch":
+        target_process_overrides:
+            Explorer:
+                action: deprioritize
+                trim_working_set: true
+            spotify:
+                action: suspend
     "Among Us":
     "Marvel-Win64-Shipping":
-
     "GW2-64":
-        target_process_overrides: # custom target processes (UNIMPLEMENTED)
-            - name: -Brave # don't target Brave or Chrome
-              action: suspend # TODO: error as no properties allowed when
-              # removing a target process with "-Process"
-            - name: -Chrome
-            - name: -Firefox
-            - name: -MSEdge
+        target_process_overrides: # defines custom target processe overrides
+            -Brave:   # don't target Brave or Chrome with GW2 ...
+            -Chrome:  # ... so we can use them to read the wiki
+            -Spotify: # often listening to music while playing
+            calc:  # an example of adding a new target process
+                trim_working_set: true
+                action: none
+    "Solitaire":
 
 # do we display Windows Action Center notifications?
 show_notifications: true
@@ -93,4 +94,4 @@ low_priority_waiting: false
 # workaround for a bug in Overwatch 2
 # patches Settings_v0.ini when it closes to keep BroadcastMarginLeft set to
 # "1.000000" (moves the UI closer to the centre of the screen)
-overwatch2_config_patch: false
+overwatch2_config_patch: true
