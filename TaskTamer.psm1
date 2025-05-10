@@ -1177,12 +1177,12 @@ function Invoke-TaskTamer
                             {
                                 if ($proc.PriorityClass -ne [System.Diagnostics.ProcessPriorityClass]::Idle)
                                 {
-                                # keep track of previous priority so we can restore it
-                                if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = [ProcessInfo]::new($proc.Id) }
-                                $processHistory[$proc.Id].priority = $proc.PriorityClass
-                                $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
-                                Write-Verbose "$($proc.Name) ($($proc.Id)) priority changed from $($processHistory[$proc.Id].priority) to $($proc.PriorityClass)"
-                            }
+                                    # keep track of previous priority so we can restore it
+                                    if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = [ProcessInfo]::new($proc.Id) }
+                                    $processHistory[$proc.Id].priority = $proc.PriorityClass
+                                    $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+                                    Write-Verbose "$($proc.Name) ($($proc.Id)) priority changed from $($processHistory[$proc.Id].priority) to $($proc.PriorityClass)"
+                                }
                                 else
                                 {
                                     Write-Verbose "$($proc.Name) ($($proc.Id)) priority is Idle - ignoring"
@@ -1191,11 +1191,11 @@ function Invoke-TaskTamer
                             elseif ($Restore)
                             {
                                 if ($processHistory -and $processHistory[$proc.Id] -and $processHistory[$proc.Id].priority)
-                            {
+                                {
                                     # restore the previous priority
-                                $proc.PriorityClass = $processHistory[$proc.Id].priority
-                                Write-Verbose "$($proc.Name) ($($proc.Id)) priority reverted to $($processHistory[$proc.Id].priority)..."
-                            }
+                                    $proc.PriorityClass = $processHistory[$proc.Id].priority
+                                    Write-Verbose "$($proc.Name) ($($proc.Id)) priority reverted to $($processHistory[$proc.Id].priority)..."
+                                }
                                 else
                                 {
                                     Write-Verbose "$($proc.Name) ($($proc.Id)) has no previous priority info so leaving it alone"
@@ -1514,7 +1514,10 @@ function Invoke-TaskTamer
             [AllowNull()]
             [Hashtable]$Override,
 
-            [int]$MaxDepth = 0
+            [int]$MaxDepth = 0,
+
+            # if set, a null value in Override will clobber a value in Default
+            [switch]$AllowNullClobbing
         )
 
         # necessary as Hashtables are passed by reference
@@ -1556,11 +1559,17 @@ function Invoke-TaskTamer
                     }
                     else
                     {
-                        # otherwise just a standard copy
-                        $merged[$key] = $Override[$key]
+                        if ($AllowNullClobbing -or ($null -ne $Override[$key]))
+                        {
+                            $merged[$key] = $Override[$key]
+                        }
                     }
                 }
             }
+        }
+        else
+        {
+            Write-Verbose "Merge-Hashmaps: Override is null, nothing to merge."
         }
 
         return $merged
@@ -1867,13 +1876,19 @@ function Invoke-TaskTamer
                     if ($launcher)
                     {
                         Write-Host "**** Detected running using launcher '$launcher' ($($launchers[$launcher]))"
-                        #TODO: insert launcher specific configuration/optimisation here?
                     }
 
-                    if (-not ($processedTargetProcessOverridesFor[$runningTriggerProcess.Name]) -and $config['trigger_processes'][$runningTriggerProcess.Name].ContainsKey('target_process_overrides'))
+                    if (-not ($processedTargetProcessOverridesFor[$runningTriggerProcess.Name]) `
+                            -and $config['trigger_processes'][$runningTriggerProcess.Name] `
+                            -and $config['trigger_processes'][$runningTriggerProcess.Name].ContainsKey('target_process_overrides'))
                     {
-                        Write-Host "**** Applying target process overrides for running trigger process '$($runningTriggerProcess.Name)': " + `
-                        ($config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'].Keys -join ", ") -ForegroundColor Cyan
+
+                        if ($config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'] -isnot [Hashtable])
+                        {
+                            throw "target_process_overrides for $($runningTriggerProcess.Name) is not a hashtable"
+                        }
+
+                        Write-Host "**** Applying target process overrides for trigger process '$($runningTriggerProcess.Name)': $($config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'].Keys -join ', ')" -ForegroundColor Cyan
 
                         # if $targetProcessesConfig is still a pointer to the same object as $targetProcessesConfigGlobal
                         if ($targetProcessesConfig -eq $targetProcessesConfigGlobal)
@@ -1893,11 +1908,19 @@ function Invoke-TaskTamer
                                 ($_.'Key' -notlike '-*') -and
                                 (-not $targetProcessesConfig.ContainsKey($_.'Key'))
                             } | ForEach-Object {
-                                # $_.Key corresponds to the process name
-                                # $_.Value correspond to the override config hashtable
+                                # $_.Key corresponds to the target process name
+                                # $_.Value correspond to the override config hashtable (possibly null)
 
-                                Write-Host "Target process override specified for '$($_.Key)' is " -ForegroundColor Cyan
+                                Write-Host "Override found for -unconfigured- target process '$($_.Key)'" -ForegroundColor Cyan
+
+                                #Write-Verbose "`$config[target_process_defaults]..."
+                                #$config['target_process_defaults'] | ConvertTo-Yaml | Write-Host
+
+                                #Write-Verbose "Override..."
+                                #($_.Value) | ConvertTo-Yaml | Write-Host
+
                                 $targetProcessesConfig[$_.Key] = Merge-Hashmaps -Default $config['target_process_defaults'] -Override $_.Value
+
                             }
 
                             <#
@@ -1905,7 +1928,14 @@ function Invoke-TaskTamer
                             Write-Verbose ($config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'] | ConvertTo-Yaml)
                             #>
 
-                            $targetProcessesConfig = Merge-Hashmaps -Default $targetProcessesConfig -Override $config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'] -MaxDepth 1
+                            # NB: if a target process override is present but empty/null, Merge-Hashmaps will not override the entry for it in $targetProcessesConfig with null
+                            $targetProcessesConfig = Merge-Hashmaps `
+                                -Default $targetProcessesConfig `
+                                -Override $config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'] `
+                                -MaxDepth 1
+
+                            #Write-Verbose "`$targetProcessesConfig (after applying target process overrides for $($runningTriggerProcess.Name))..."
+                            #Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
                         }
                         catch
                         {
@@ -1916,7 +1946,7 @@ function Invoke-TaskTamer
                     }
                     else
                     {
-                        Write-Verbose "No target process overrides to process for $($runningTriggerProcess.Name)"
+                        Write-Verbose "No target process overrides for '$($runningTriggerProcess.Name)'"
                     }
                 }
 
@@ -1939,10 +1969,9 @@ function Invoke-TaskTamer
                 }
 
                 # Minimise windows of all target processes
-                # FIXME: doesn't work for certain apps (e.g. Microsoft Store apps like WhatsApp)
                 Write-Host "**** Minimizing target process windows..."
 
-                foreach ($proc in Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) -and $targetProcessesConfig[$_.Name]['minimize'] } )
+                foreach ($proc in Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) } )
                 {
                     try
                     {
@@ -2118,7 +2147,7 @@ function Invoke-TaskTamer
                 {
                     break # out of while()
                 }
-                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Listening for trigger processes {Press Q to Quit}..."
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Listening for trigger processes { Press Q to Quit }..."
             }
             else
             {
