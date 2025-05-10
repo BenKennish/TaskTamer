@@ -1186,6 +1186,7 @@ function Invoke-TaskTamer
                                 else
                                 {
                                     Write-Verbose "$($proc.Name) ($($proc.Id)) priority is Idle - ignoring"
+                                    $processHistory[$proc.Id].priority = $null
                                 }
                             }
                             elseif ($Restore)
