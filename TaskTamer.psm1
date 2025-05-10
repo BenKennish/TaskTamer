@@ -1175,17 +1175,31 @@ function Invoke-TaskTamer
                         {
                             if ($Throttle)
                             {
+                                if ($proc.PriorityClass -ne [System.Diagnostics.ProcessPriorityClass]::Idle)
+                                {
                                 # keep track of previous priority so we can restore it
                                 if (-not $processHistory[$proc.Id]) { $processHistory[$proc.Id] = [ProcessInfo]::new($proc.Id) }
-
                                 $processHistory[$proc.Id].priority = $proc.PriorityClass
                                 $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
                                 Write-Verbose "$($proc.Name) ($($proc.Id)) priority changed from $($processHistory[$proc.Id].priority) to $($proc.PriorityClass)"
                             }
-                            elseif ($processHistory -and $processHistory[$proc.Id] -and $processHistory[$proc.Id].priority)
+                                else
+                                {
+                                    Write-Verbose "$($proc.Name) ($($proc.Id)) priority is Idle - ignoring"
+                                }
+                            }
+                            elseif ($Restore)
                             {
+                                if ($processHistory -and $processHistory[$proc.Id] -and $processHistory[$proc.Id].priority)
+                            {
+                                    # restore the previous priority
                                 $proc.PriorityClass = $processHistory[$proc.Id].priority
                                 Write-Verbose "$($proc.Name) ($($proc.Id)) priority reverted to $($processHistory[$proc.Id].priority)..."
+                            }
+                                else
+                                {
+                                    Write-Verbose "$($proc.Name) ($($proc.Id)) has no previous priority info so leaving it alone"
+                                }
                             }
                         }
                         'close'
@@ -1197,7 +1211,7 @@ function Invoke-TaskTamer
                             {
                                 Write-Warning "Unable to close $($proc.Name) ($($proc.Id)): UNIMPLEMENTED."
                             }
-                            else
+                            elseif ($Restore)
                             {
                                 Write-Warning "Unable to reopen $($proc.Name) ($($proc.Id)): UNIMPLEMENTED."
                             }
