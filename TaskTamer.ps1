@@ -17,6 +17,19 @@ function Write-Log {
     "$timestamp - $Message" | Add-Content -Path $logFile
 }
 
+# Configure PSReadLine for better console experience
+if (Get-Module -Name PSReadLine) {
+    Set-PSReadLineOption -Colors @{
+        Command   = 'Yellow'
+        Number    = 'Green'
+        Member    = 'Cyan'
+        Operator  = 'Magenta'
+        Type      = 'Blue'
+        Variable  = 'Red'
+        Parameter = 'Gray'
+    }
+}
+
 try {
     Write-Log "Starting TaskTamer"
     
