@@ -1,6 +1,6 @@
 @{
     RootModule           = 'TaskTamer.psm1'
-    ModuleVersion        = '0.15.1'
+    ModuleVersion        = '0.15.0'
     CompatiblePSEditions = @('Desktop')
     GUID                 = '8c78f3c8-af9d-4e51-8942-4d88b6ae3a10'
     Author               = 'Ben Kennish'
@@ -13,22 +13,17 @@ The precise nature of the throttle/taming can be defined in the config file, inc
 Suspended target processes are effectively frozen and therefore can't slow down the trigger process (or any other running process) by using CPU or accessing the disk or network in the background. Windows is also more likely to move memory used by target processes from fast RAM to the slower pagefile on disk, which leaves more speedy RAM available for the trigger process to use."
 
     PowerShellVersion    = '5.1'
-    RequiredModules      = @('powershell-yaml', 'BurntToast', 'PSReadLine')
+    RequiredModules      = @('powershell-yaml', 'BurntToast')
     FunctionsToExport    = @('Invoke-TaskTamer', 'Get-TaskTamerStatus', 'Get-TaskTamerMetrics')
     CmdletsToExport      = @()
     VariablesToExport    = @()
     AliasesToExport      = @('TaskTamer')
-    FormatsToProcess     = @('TaskTamer.Format.ps1xml')
-    FileList             = @("TaskTamer.psm1", "config-template.yaml", "README.md", "LICENSE.md", "images\play.ico", "images\pause.ico", "TaskTamer.Format.ps1xml")
+    FileList             = @("TaskTamer.psm1", "config-template.yaml", "README.md", "LICENSE.md", "images\play.ico", "images\pause.ico")
     PrivateData          = @{
         PSData = @{
             LicenseUri   = 'https://www.gnu.org/licenses/gpl-3.0.html#license-text'
             ProjectUri   = 'https://github.com/BenKennish/TaskTamer/'
             ReleaseNotes = @'
-Version 0.15.1:
-- Added syntax highlighting for output
-- Added custom formatting for status and metrics
-- Added PSReadLine module dependency for better console experience
 Version 0.15.0:
 - Added error handling and logging
 - Added performance metrics collection
