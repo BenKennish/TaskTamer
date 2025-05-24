@@ -4,36 +4,32 @@
 # Please edit config.yaml instead
 # (it's autocreated from this template on running TaskTamer)
 # =======================@
-# any text after a '#'' sign is ignored by TaskTamer
+
+# Version of the config file format
+config_version: "1.0"
+
+# Logging configuration
+logging:
+    enabled: true
+    level: "Info"  # Valid values: Debug, Info, Warning, Error
+    retention_days: 7
+
+# Performance metrics collection
+metrics:
+    enabled: true
+    collection_interval: 60  # seconds
+    retention_period: 30     # days
 
 # this part defines the default settings for target processes
 target_process_defaults:
     action: suspend
-    # main action to take. valid values: suspend, deprioritize, close, none
-
     minimize: true
-    # minimizes all windows belonging to the target process before taking the above action
-
     trim_working_set: false
-    # trims the RAM (working set) of the target process. although this can free
-    # up lots of RAM for the trigger process, the target process will likely be
-    # considerably slower for a while once resumed, regardless of whether the
-    # trigger process used or benefited from the RAM.
-
     show_subtotal_only: true
-    # when displaying table of information about target processes,
-    # only show a subtotal for all target processes with the same name.
-
     is_launcher: false
-    # any target process set as a launcher (e.g. Steam) will not be suspended
-    # if it was used to launch the trigger process, because this can mess the
-    # trigger process up.
 
-# list of target processes ("name": filename without ".exe") that TaskTamer
-# will 'throttle' (e.g. suspend) whenever any trigger processes are running.
-# any default settings above can be overridden here
+# list of target processes
 target_processes:
-    # Note: you can just list a process (and just use defaults) like this...
     "Chrome":
     "Firefox":
     "MSEdge":
@@ -51,8 +47,6 @@ target_processes:
         action: none
         minimize: false
 
-    # game launchers to be throttled
-    # unless they were used to launch the trigger process
     "Steam":
         is_launcher: true
     "EpicGamesLauncher":
@@ -60,8 +54,7 @@ target_processes:
     "Battle.net":
         is_launcher: true
 
-# list of process names (filename without ".exe")
-# to act as triggers (e.g. video games)
+# list of trigger processes
 trigger_processes:
     "FortniteClient-Win64-Shipping":
     "RocketLeague":
@@ -75,23 +68,29 @@ trigger_processes:
     "Among Us":
     "Marvel-Win64-Shipping":
     "GW2-64":
-        target_process_overrides: # defines custom target processe overrides
-            -Brave:   # don't target Brave or Chrome with GW2 ...
-            -Chrome:  # ... so we can use them to read the wiki
-            -Spotify: # often listening to music while playing
-            calc:  # an example of adding a new target process
+        target_process_overrides:
+            -Brave:
+            -Chrome:
+            -Spotify:
+            calc:
                 trim_working_set: true
                 action: none
     "Solitaire":
 
-# do we display Windows Action Center notifications?
-show_notifications: true
+# Notification settings
+notifications:
+    enabled: true
+    action_center: true
+    sound: false
+    startup_message: true
 
-# should TaskTamer set itself to a low CPU priority when waiting for trigger
-# processes to close?
-low_priority_waiting: false
+# Performance settings
+performance:
+    low_priority_waiting: false
+    poll_interval: 1000      # milliseconds
+    memory_threshold: 90     # percentage
+    cpu_threshold: 80        # percentage
 
-# workaround for a bug in Overwatch 2
-# patches Settings_v0.ini when it closes to keep BroadcastMarginLeft set to
-# "1.000000" (moves the UI closer to the centre of the screen)
-overwatch2_config_patch: true
+# Game-specific patches
+patches:
+    overwatch2_config_patch: true
