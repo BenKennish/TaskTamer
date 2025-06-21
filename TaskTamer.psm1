@@ -962,6 +962,8 @@ function Invoke-TaskTamer
 
             $runningTargetProcesses = Get-Process | Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) -and $targetProcessesConfig.ContainsKey($_.Name) }
 
+            $numTargetedProcesses = 0
+
             foreach ($proc in $runningTargetProcesses)
             {
                 #TODO: these might be useful properties:
@@ -1003,6 +1005,8 @@ function Invoke-TaskTamer
                 {
                     continue
                 }
+
+
 
                 if ($Throttle)
                 {
@@ -1114,6 +1118,9 @@ function Invoke-TaskTamer
                     }
                     continue # to next process
                 }
+
+                # consider this process as a targetted process
+                $numTargetedProcesses++
 
                 $totalRamUsage += $proc.WorkingSet64
                 if (-not $NoDeltas)
@@ -1255,9 +1262,15 @@ function Invoke-TaskTamer
                 $lastProcessName = $proc.Name
             }
 
-            # write subtotal row for the last process group (if there were >1 processes)
-            if (-not $NoOutput)
+
+            # it's possible runningTargetProcesses contains only launcher processes
+            if ($numTargetedProcesses -le 0)
             {
+                #Write-Host "< No processes were targetted >"
+            }
+            elseif (-not $NoOutput)
+            {
+                # write subtotal row for the last process group (if there were >1 processes)
                 if ($lastProcessName -eq $Launcher)
                 {
                     Write-Subtotal `
@@ -1582,7 +1595,7 @@ function Invoke-TaskTamer
         }
         else
         {
-            Write-Verbose "Merge-Hashmaps: Override is null, nothing to merge."
+            Write-Debug "Merge-Hashmaps: Override is null, nothing to merge."
         }
 
         return $merged
