@@ -1957,7 +1957,7 @@ public class DisplaySettings
     #Write-Verbose "targetProcessesConfig (merged)..."
     #Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
 
-    # this will be used by Start-Unlock to indicate that we can ignore any -ResumeAll
+    # this will be used by Start-Unlock to indicate that we can ignore -ResumeAll
     $resumedAll = $false
 
     if (-not (Start-Unlock ([ref]$resumedAll)))
@@ -2255,6 +2255,7 @@ public class DisplaySettings
                     # old way of doing it that cannot be broken out of with Ctrl-C
                     #$runningTriggerProcess.WaitForExit()
 
+                    # pipeline - wait for all the trigger processes to exit
                     $runningTriggerProcesses | Wait-Process
                 }
 
@@ -2282,19 +2283,18 @@ public class DisplaySettings
 
                 if ($config['show_notifications'])
                 {
-                    # FIXME: will only give the name of the last trigger process to exit
-                    New-BurntToastNotification -Text "$($runningTriggerProcess.Name) exited", "Resuming target processes." -AppLogo $playIconPath -UniqueIdentifier "TaskTamer" -Sound IM -Header $notificationsHeader
+                    New-BurntToastNotification -Text "All trigger processes exited", "Resuming target processes." -AppLogo $playIconPath -UniqueIdentifier "TaskTamer" -Sound IM -Header $notificationsHeader
                 }
 
-                # FIXME: if you open a game and then you open another game before closing the first, closing the first
+                # FIXME: if you open a game and then you open a second game before closing the first, closing the first
                 # will result in resuming the suspended processes and then, 2s later, suspending them all again
-                # which isn't very efficient.  However most people don't run multiple games at once so
-                # this isn't a priority to fix
+                # which isn't very efficient.
 
-                Write-Host "**** Restoring target processes..."
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Restoring target processes..." -ForegroundColor Cyan
                 Set-TargetProcessesState -Restore -Launcher $launcher | Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS_WITH_RAM_DELTA -ColumnFormats $COLUMN_FORMATS_WITH_RAM_DELTA
 
                 $throttledProcesses = $false
+
 
                 # Overwatch config file patch for 'BroadcastMarginLeft'
                 #
