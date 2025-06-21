@@ -82,6 +82,10 @@ trigger_processes:
             calc:  # an example of adding a new target process
                 trim_working_set: true
                 action: none
+        resolution:
+            width: 1920
+            height: 1080
+            frequency: 120
     "Solitaire":
 
 # do we display Windows Action Center notifications?

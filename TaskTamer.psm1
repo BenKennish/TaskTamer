@@ -333,6 +333,14 @@ function Invoke-TaskTamer
     }
 
 
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+
+
+
     # retrive the path of the folder where the script/module is located
     if (-not ([System.AppDomain]::CurrentDomain.FriendlyName -like "*.exe"))
     {
@@ -1666,6 +1674,153 @@ function Invoke-TaskTamer
     }
 
 
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+public struct DEVMODE
+{
+    private const int CCHDEVICENAME = 0x20;
+    private const int CCHFORMNAME = 0x20;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
+    public string dmDeviceName;
+    public ushort dmSpecVersion;
+    public ushort dmDriverVersion;
+    public ushort dmSize;
+    public ushort dmDriverExtra;
+    public uint dmFields;
+    public int dmPositionX;
+    public int dmPositionY;
+    public uint dmDisplayOrientation;
+    public uint dmDisplayFixedOutput;
+    public short dmColor;
+    public short dmDuplex;
+    public short dmYResolution;
+    public short dmTTOption;
+    public short dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHFORMNAME)]
+    public string dmFormName;
+    public ushort dmLogPixels;
+    public uint dmBitsPerPel;
+    public uint dmPelsWidth;
+    public uint dmPelsHeight;
+    public uint dmDisplayFlags;
+    public uint dmDisplayFrequency;
+    public uint dmICMMethod;
+    public uint dmICMIntent;
+    public uint dmMediaType;
+    public uint dmDitherType;
+    public uint dmReserved1;
+    public uint dmReserved2;
+    public uint dmPanningWidth;
+    public uint dmPanningHeight;
+}
+
+public class DisplaySettings
+{
+    [DllImport("user32.dll")] public static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
+    [DllImport("user32.dll")] public static extern int ChangeDisplaySettings(ref DEVMODE devMode, int flags);
+}
+"@ -PassThru | Out-Null
+
+    # Retrieves current display settings, with a fallback if EnumDisplaySettings fails.
+    # FIXME: Probably needs some work for multi-monitor setups
+    function Get-CurrentMode
+    {
+
+        <#
+        Get-CimInstance -ClassName Win32_VideoController |
+        Select-Object `
+            @{Name = 'Width';       Expression = { $_.CurrentHorizontalResolution }}, `
+            @{Name = 'Height';      Expression = { $_.CurrentVerticalResolution }}, `
+            @{Name = 'Pixels';      Expression = { $_.CurrentHorizontalResolution * $_.CurrentVerticalResolution }}, `
+            @{Name = 'RefreshRate'; Expression = { $_.CurrentRefreshRate }} |
+        Sort-Object -Property Pixels -Descending |
+        Select-Object -First 1
+        #>
+
+        $devmode = New-Object DEVMODE
+        $devmode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($devmode)
+
+        <#
+        lpszDeviceName
+        Windows 95, 98: This must be a null string. Windows NT, 2000: If this is a null string, the current display device is used. Otherwise, this is the device name of the display device to examine. The string is of the form "\\.\DisplayX", where X is 1, 2, or 3.
+
+        iModeNum
+        The number of the graphics mode to retrieve information about. This could also be one of the following flags specifying a graphics mode:
+        ENUM_CURRENT_SETTINGS
+        Get information about the current display settings.
+        ENUM_REGISTRY_SETTINGS
+        Get information about the display settings stored in the registry.
+        lpDevMode
+        Receives information about the graphics mode. Only the dmBitsPerPixel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, and dmDisplayFrequency members have useful data in them. Before calling the function, this structure's dmSize member must be properly set.
+        #>
+        if ([DisplaySettings]::EnumDisplaySettings($null, -1, [ref]$devmode))
+        {
+            return $devmode
+        }
+        else
+        {
+            # FIXME: why is EnumDisplaySettings failing?
+            Write-Warning "EnumDisplaySettings failed; falling back to System.Windows.Forms.Screen"
+            Add-Type -AssemblyName System.Windows.Forms
+            $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $devmode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($devmode)
+            $devmode.dmPelsWidth = $screen.Width
+            $devmode.dmPelsHeight = $screen.Height
+            $devmode.dmDisplayFrequency = 60   # FIXME: this is a guess, as we don't have the frequency info from Screen
+            $devmode.dmFields = 0x580000  # DM_PELSWIDTH + DM_PELSHEIGHT + DM_DISPLAYFREQUENCY
+            return $devmode
+        }
+    }
+
+    function Set-DisplayMode
+    {
+        param(
+            [Parameter(Mandatory)] [int]$Width,
+            [Parameter(Mandatory)] [int]$Height,
+            [int]$Frequency = 60
+        )
+        try
+        {
+            $mode = New-Object DEVMODE
+            $mode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($mode)
+            $mode.dmPelsWidth = $Width
+            $mode.dmPelsHeight = $Height
+            $mode.dmDisplayFrequency = $Frequency
+            # DM_PELSWIDTH (0x00080000) + DM_PELSHEIGHT (0x00100000) + DM_DISPLAYFREQUENCY (0x00400000)
+            $mode.dmFields = 0x580000
+
+            $result = [DisplaySettings]::ChangeDisplaySettings([ref]$mode, 0)
+            switch ($result)
+            {
+                0
+                {
+                    # DISP_CHANGE_SUCCESSFUL
+                    Write-Verbose "Display mode set to ${Width}x${Height}@${Frequency}Hz successfully."
+                    return $true
+                }
+                1
+                {
+                    # DISP_CHANGE_RESTART
+                    Write-Warning "Mode change requires system restart to take effect."
+                    return $false
+                }
+                -1 { throw "Failed: The display driver failed the specified graphics mode." }
+                -2 { throw "Failed: The graphics mode is incompatible." }
+                -3 { throw "Failed: The display driver failed the specified graphics mode." }
+                -4 { throw "Failed: The display mode is invalid." }
+                default { throw "Unknown ChangeDisplaySettings return code: $result" }
+            }
+        }
+        catch
+        {
+            Write-Error "Error setting display mode: $_"
+            return $false
+        }
+    }
+
 
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
@@ -1849,6 +2004,9 @@ function Invoke-TaskTamer
 
         while ($true)
         {
+            # stores the previous resolution if a trigger process configuration requires switching resolution
+            $previousResolution = $null
+
             # NB: hashtables are case INsensitive w.r.t. their keys by default
             $runningTriggerProcesses = Get-Process | Where-Object { $config['trigger_processes'].ContainsKey($_.Name) }
 
@@ -1948,6 +2106,36 @@ function Invoke-TaskTamer
                     else
                     {
                         Write-Verbose "No target process overrides for '$($runningTriggerProcess.Name)'"
+                    }
+
+
+                    # switch display resolution if specified in the trigger process config
+                    #
+                    if ($null -eq $previousResolution -and
+                        $config['trigger_processes'][$runningTriggerProcess.Name] -and $config['trigger_processes'][$runningTriggerProcess.Name].ContainsKey('resolution'))
+                    {
+                        Write-Verbose "Trigger process '$($runningTriggerProcess.Name)' has a resolution set"
+
+                        $res = $config['trigger_processes'][$runningTriggerProcess.Name]['resolution'];
+
+                        # sanity check the resolution supplied
+                        if ($res.width -isnot [int] -or $res.width -le 0 -or
+                            $res.height -isnot [int] -or $res.height -le 0 -or
+                            $res.frequency -isnot [int] -or $res.frequency -le 0)
+                        {
+                            throw "Invalid resolution specified in config for trigger process '$($runningTriggerProcess.Name)': $($res | ConvertTo-Yaml)"
+                        }
+
+                        # Save current resolution to restore when trigger process exits
+                        $previousResolution = Get-CurrentMode
+
+                        Write-Host "**** Changing resolution: $($res.width)x$($res.height) ($($res.frequency)Hz) for trigger process '$($runningTriggerProcess.Name)'" -ForegroundColor Cyan
+
+                        # Switch resolution
+                        if (-not (Set-DisplayMode -Width $res.width -Height $res.height -Frequency $res.frequency))
+                        {
+                            Write-Warning "Set-DisplayMode failed, continuing with the current resolution"
+                        }
                     }
                 }
 
@@ -2062,6 +2250,18 @@ function Invoke-TaskTamer
                 }
 
                 # ---------------------------------------------------------------------------------------------------
+
+                if ($null -ne $previousResolution)
+                {
+                    # Restore original resolution - we do this first because the following tasks can run while the user is waiting for the resolution to reset, and because restored target processes
+                    # are more likely to restore happily into the previous resolution
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Restoring resolution: $($previousResolution.dmPelsWidth)x$($previousResolution.dmPelsHeight) ($($previousResolution.dmDisplayFrequency)Hz)" -ForegroundColor Cyan
+                    if (-not (Set-DisplayMode -Width $previousResolution.dmPelsWidth -Height $previousResolution.dmPelsHeight -Frequency $previousResolution.dmDisplayFrequency))
+                    {
+                        Write-Warning "Set-DisplayMode to original resolution failed.  Ugh!"
+                    }
+                    $previousResolution = $null
+                }
 
                 if ($config['show_notifications'])
                 {
