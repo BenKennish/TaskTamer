@@ -85,8 +85,9 @@ trigger_processes:
         resolution:
             width: 1920
             height: 1080
-            frequency: 120
+            frequency: 60
     "Solitaire":
+
 
 # do we display Windows Action Center notifications?
 show_notifications: true

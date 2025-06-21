@@ -205,8 +205,7 @@ function Invoke-TaskTamer
     $previousEnv['WindowTitle'] = $host.UI.RawUI.WindowTitle
 
 
-
-    function Start-Lock
+    function Start-Unlock
     {
         param
         (
@@ -264,6 +263,20 @@ function Invoke-TaskTamer
         return $true
     }
 
+    function Remove-LockFile
+    {
+        if (Test-Path -Path $lockFilePath)
+        {
+            try
+            {
+                Remove-Item -Path $lockFilePath -Force -ErrorAction Continue
+            }
+            catch
+            {
+                Write-Host "Error deleting lockfile ${lockFilePath}: $_" -ForegroundColor Red
+            }
+        }
+    }
 
     # clean up function to call later
     # -----------------------------------------------------------------------------
@@ -285,17 +298,8 @@ function Invoke-TaskTamer
                 Set-TargetProcessesState -Restore -Launcher $launcher -NoOutput
             }
 
-            if (Test-Path -Path $lockFilePath)
-            {
-                try
-                {
-                    Remove-Item -Path $lockFilePath -Force -ErrorAction Continue
-                }
-                catch
-                {
-                    Write-Host "Error deleting ${lockFilePath}: $_" -ForegroundColor Red
-                }
-            }
+            # remove the lock file as we have terminated properly
+            Remove-LockFile
 
             Write-Host "Restoring original environment..."
             Set-StrictMode -Off  # not strictly necessary but "just in cases"
@@ -1940,10 +1944,10 @@ public class DisplaySettings
     #Write-Verbose "targetProcessesConfig (merged)..."
     #Write-Verbose ($targetProcessesConfig | ConvertTo-Yaml)
 
-    # this will be used by Start-Lock to indicate we can ignore -ResumeAll
+    # this will be used by Start-Unlock to indicate that we can ignore any -ResumeAll
     $resumedAll = $false
 
-    if (-not (Start-Lock -ResumedAll ([ref]$resumedAll)))
+    if (-not (Start-Unlock ([ref]$resumedAll)))
     {
         # if we failed to grab the lock
         return
