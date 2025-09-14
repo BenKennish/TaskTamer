@@ -1614,7 +1614,7 @@ function Invoke-TaskTamer
             # (?s) dotall mode to make . match newline characters
 
             Write-Host "Creating $configPath from config-template.yaml..." -ForegroundColor Yellow
-                ((Get-Content -Path $templatePath -Raw) -replace "(?s)# @=+\s.*?=+@", $configYamlHeader) | Out-File -FilePath $configPath -Force
+            ((Get-Content -Path $templatePath -Raw) -replace "(?s)# @=+\s.*?=+@", $configYamlHeader) | Out-File -FilePath $configPath -Force
         }
 
         $config = Get-Content -Path $configPath -Raw | ConvertFrom-Yaml
@@ -1874,7 +1874,7 @@ public class DisplaySettings
     # Draw the pretty name box
     Write-Host ("{0}{1}{2}" -f
         $BoxDrawingChars.TopLeft,
-            ([String]::new($BoxDrawingChars.Horizontal, $boxLength)),
+        ([String]::new($BoxDrawingChars.Horizontal, $boxLength)),
         $BoxDrawingChars.TopRight) -ForegroundColor Yellow
 
     Write-Host ($BoxDrawingChars.Vertical + " ") -NoNewLine -ForegroundColor Yellow
@@ -1883,7 +1883,7 @@ public class DisplaySettings
 
     Write-Host ("{0}{1}{2}" -f
         $BoxDrawingChars.BottomLeft,
-            ([String]::new($BoxDrawingChars.Horizontal, $boxLength)),
+        ([String]::new($BoxDrawingChars.Horizontal, $boxLength)),
         $BoxDrawingChars.BottomRight) -ForegroundColor Yellow
 
     Write-Verbose "Running from $($MyInvocation.MyCommand.Module.ModuleBase)"
@@ -2036,7 +2036,7 @@ public class DisplaySettings
 
                 foreach ($runningTriggerProcess in $runningTriggerProcesses)
                 {
-                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id))" -ForegroundColor Cyan
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Trigger process detected: $($runningTriggerProcess.Name) ($($runningTriggerProcess.Id))" -ForegroundColor Green
 
                     if (-not $runningTriggerProcess.PriorityBoostEnabled)
                     {
