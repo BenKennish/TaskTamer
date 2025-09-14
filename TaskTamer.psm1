@@ -1690,7 +1690,7 @@ function Invoke-TaskTamer
         return $false
     }
 
-
+    <#
     Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -1740,6 +1740,8 @@ public class DisplaySettings
     [DllImport("user32.dll")] public static extern int ChangeDisplaySettings(ref DEVMODE devMode, int flags);
 }
 "@ -PassThru | Out-Null
+
+#>
 
     # Retrieves current display settings, with a fallback if EnumDisplaySettings fails.
     # FIXME: Probably needs some work for multi-monitor setups
@@ -1792,6 +1794,21 @@ public class DisplaySettings
         }
     }
 
+    function Get-CurrentModeNew
+    {
+        Import-Module -Name WindowsDisplayManager -ErrorAction Stop
+        $primaryDisplay = WindowsDisplayManager\GetPrimaryDisplay
+
+        $ret = $primaryDisplay.Resolution  # this object has Width, Height, and RefreshRate properties
+
+        if ($null -ne $primaryDisplay.HdrInfo -and $null -ne $primaryDisplay.HdrInfo.HdrEnabled)
+        {
+            $ret.HDR = $primaryDisplay.HdrInfo.HdrEnabled   #might not wortk if $ret is not a PSCustomObject
+        }
+        return $ret
+    }
+
+
     function Set-DisplayMode
     {
         param(
@@ -1834,6 +1851,70 @@ public class DisplaySettings
         catch
         {
             Write-Error "Error setting display mode: $_"
+            return $false
+        }
+    }
+
+
+    function Set-DisplayModeNew
+    {
+        param (
+            [int]$Width,
+            [int]$Height,
+            [int]$Frequency,
+            [bool]$HDR
+        )
+
+        try
+        {
+            Import-Module -Name WindowsDisplayManager -ErrorAction Stop
+
+            $primaryDisplay = WindowsDisplayManager\GetPrimaryDisplay
+
+            # change resolution (and frequency) if requested
+            if ($Width -and $Height)
+            {
+                if ($null -ne $Frequency)
+                {
+                    if ($Frequency -gt 0 -and $Frequency -le 300)
+                    {
+                        Write-Verbose "Setting resolution to $Width x $Height (@${Frequency}Hz)..."
+                        $primaryDisplay.SetResolution($Width, $Height, $Frequency)
+                    }
+                }
+                else
+                {
+                    Write-Verbose "Setting resolution to $Width x $Height..."
+                    $primaryDisplay.SetResolution($Width, $Height)
+                }
+            }
+
+            # enable or disable HDR if requested
+            if ($null -ne $HDR)
+            {
+                if ($primaryDisplay.HdrInfo.HdrSupported)
+                {
+                    if ($HDR)
+                    {
+                        Write-Verbose "Enabling HDR..."
+                        $primaryDisplay.EnableHdr()
+                    }
+                    else
+                    {
+                        Write-Verbose "Disabling HDR..."
+                        $primaryDisplay.DisableHdr()
+                    }
+                }
+                else
+                {
+                    Write-Warning "Primary display does not support HDR.  Ignoring HDR request to Set-DisplayMode."
+                }
+            }
+
+            return $true
+        }
+        catch
+        {
             return $false
         }
     }
@@ -1977,7 +2058,6 @@ public class DisplaySettings
 
     if ($config['show_notifications'])
     {
-        #Enable-Module -Name "BurntToast"
         $notificationsHeader = New-BTHeader -Id 'TaskTamer' -Title 'TaskTamer'
     }
 
@@ -2126,33 +2206,55 @@ public class DisplaySettings
                     }
 
 
-                    # switch display resolution if specified in the trigger process config
+                    # switch display resolution/refresh/HDR if specified in the trigger process config
                     #
                     if ($null -eq $previousResolution -and
-                        $config['trigger_processes'][$runningTriggerProcess.Name] -and $config['trigger_processes'][$runningTriggerProcess.Name].ContainsKey('resolution'))
+                        $config['trigger_processes'][$runningTriggerProcess.Name] -and
+                        $config['trigger_processes'][$runningTriggerProcess.Name].ContainsKey('resolution'))
                     {
                         Write-Verbose "Trigger process '$($runningTriggerProcess.Name)' has a resolution set"
-
                         $res = $config['trigger_processes'][$runningTriggerProcess.Name]['resolution'];
 
-                        # sanity check the resolution supplied
-                        if ($res.width -isnot [int] -or $res.width -le 0 -or
-                            $res.height -isnot [int] -or $res.height -le 0 -or
-                            $res.frequency -isnot [int] -or $res.frequency -le 0)
-                        {
-                            throw "Invalid resolution specified in config for trigger process '$($runningTriggerProcess.Name)': $($res | ConvertTo-Yaml)"
-                        }
+                        $params = @{}
 
                         # Save current resolution to restore when trigger process exits
-                        $previousResolution = Get-CurrentMode
+                        $previousResolution = Get-CurrentModeNew
 
-                        Write-Host "**** Changing resolution: $($res.width)x$($res.height) ($($res.frequency)Hz) for trigger process '$($runningTriggerProcess.Name)'" -ForegroundColor Cyan
-
-                        # Switch resolution
-                        if (-not (Set-DisplayMode -Width $res.width -Height $res.height -Frequency $res.frequency))
+                        if ($null -ne $res.width)
                         {
-                            Write-Warning "Set-DisplayMode failed, continuing with the current resolution"
+                            # sanity check the resolution supplied
+                            if ($res.width -isnot [int] -or $res.width -le 0 -or
+                                $res.height -isnot [int] -or $res.height -le 0)
+                            {
+                                throw "Invalid resolution specified in config for trigger process '$($runningTriggerProcess.Name)': $($res | ConvertTo-Yaml)"
+                            }
+                            $params['Width'] = $res.width
+                            $params['Height'] = $res.height
                         }
+                        if ($null -ne $res.freqency)
+                        {
+                            if ($res.frequency -isnot [int] -or $res.frequency -le 0 -or $res.frequency -gt 240)
+                            {
+                                throw "Invalid frequency in resolution block specified in config for trigger process '$($runningTriggerProcess.Name)': $($res | ConvertTo-Yaml)"
+                            }
+                            $params['Frequency'] = $res.frequency
+                        }
+                        if ($null -ne $res.hdr)
+                        {
+                            # bool
+                            $params['HDR'] = $res.hdr
+                        }
+
+                        $opDescription = (if ($res.width) { "$($res.width)x$($res.height)" }) +
+                        (if ($res.frequency) { "($(res.frequency)hz) " }) +
+                        (if ($null -ne $res.hdr) { "HDR: " + (if ($res.hdr) { "On" } else { "Off" }) })
+
+                        Write-Host "**** Changing primary display: $opDescription for trigger process '$($runningTriggerProcess.Name)'" -ForegroundColor Cyan
+                        if (-not (Set-DisplayModeNew @params))
+                        {
+                            Write-Warning "Set-DisplayModeNow failed, continuing with the current resolution"
+                        }
+
                     }
                 }
 
@@ -2273,8 +2375,9 @@ public class DisplaySettings
                 {
                     # Restore original resolution - we do this first because the following tasks can run while the user is waiting for the resolution to reset, and because restored target processes
                     # are more likely to restore happily into the previous resolution
-                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Restoring resolution: $($previousResolution.dmPelsWidth)x$($previousResolution.dmPelsHeight) ($($previousResolution.dmDisplayFrequency)Hz)" -ForegroundColor Cyan
-                    if (-not (Set-DisplayMode -Width $previousResolution.dmPelsWidth -Height $previousResolution.dmPelsHeight -Frequency $previousResolution.dmDisplayFrequency))
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Restoring display: $($previousResolution.Width)x$($previousResolution.Height) ($($previousResolution.RefreshRate)Hz) HDR: $($previousResolution.HDR)" -ForegroundColor Cyan
+
+                    if (-not (Set-DisplayModeNew -Width $previousResolution.Width -Height $previousResolution.Height -Frequency $previousResolution.RefreshRate -HDR $previousResolution.HDR))
                     {
                         Write-Warning "Set-DisplayMode to original resolution failed.  Ugh!"
                     }

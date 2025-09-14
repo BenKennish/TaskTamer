@@ -52,7 +52,7 @@ Suspended target processes are effectively frozen and therefore can't slow down 
     # ProcessorArchitecture = ''
 
     # Modules that must be imported into the global environment prior to importing this module
-    RequiredModules      = @('powershell-yaml', 'BurntToast')
+    RequiredModules      = @('powershell-yaml', 'BurntToast', 'WindowsDisplayManager')
 
     # Assemblies that must be loaded prior to importing this module
     # RequiredAssemblies = @()
