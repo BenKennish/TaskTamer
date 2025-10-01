@@ -8,6 +8,7 @@
 
 # this part defines the default settings for target processes
 target_process_defaults:
+
     action: suspend
     # main action to take. valid values: suspend, deprioritize, close, none
 
@@ -29,6 +30,7 @@ target_process_defaults:
     # if it was used to launch the trigger process, because this can mess the
     # trigger process up.
 
+
 # list of target processes ("name": filename without ".exe") that TaskTamer
 # will 'throttle' (e.g. suspend) whenever any trigger processes are running.
 # any default settings above can be overridden here
@@ -47,9 +49,6 @@ target_processes:
     "Signal":
         action: close
 
-    "Explorer":
-        action: none
-        minimize: false
 
     # game launchers to be throttled
     # unless they were used to launch the trigger process
@@ -63,15 +62,22 @@ target_processes:
 # list of process names (filename without ".exe")
 # to act as triggers (e.g. video games)
 trigger_processes:
+
     "FortniteClient-Win64-Shipping":
+        resolution:
+            width: 1920
+            height: 1080
+            frequency: 60
+
     "RocketLeague":
+        target_process_overrides:
+            -Spotify:  # music
+
     "Overwatch":
         target_process_overrides:
             Explorer:
                 action: deprioritize
                 trim_working_set: true
-            spotify:
-                action: suspend
     "Among Us":
     "Marvel-Win64-Shipping":
     "GW2-64":
@@ -100,3 +106,14 @@ low_priority_waiting: false
 # patches Settings_v0.ini when it closes to keep BroadcastMarginLeft set to
 # "1.000000" (moves the UI closer to the centre of the screen)
 overwatch2_config_patch: true
+
+# location of the svcl.exe binary for use in resetting app volumes
+# leave blank to disable volume resetting
+# see: https://www.nirsoft.net/utils/sound_volume_command_line.html
+svcl_path: 'C:\Users\ben\AppData\Local\svcl\svcl.exe'
+#
+# when to reset all application volumes to 100%
+# throttle : when a trigger process starts
+# restore  : when a trigger process ends
+reset_volumes_on_throttle: true
+reset_volumes_on_restore: true

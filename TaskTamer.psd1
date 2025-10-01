@@ -9,7 +9,7 @@
     RootModule           = 'TaskTamer.psm1'
 
     # Version number of this module.
-    ModuleVersion        = '0.14.1'
+    ModuleVersion        = '0.15.0'
 
     # Supported PSEditions
     CompatiblePSEditions = @('Desktop')

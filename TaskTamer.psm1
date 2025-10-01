@@ -1839,6 +1839,24 @@ public class DisplaySettings
     }
 
 
+    # resets sound devices and volumes for all apps to the recommended defaults
+    function Reset-AppVolumes
+    {
+        if ($config.svcl_path)
+        {
+            if (-not (Test-Path -Path $config.svcl_path))
+            {
+                Write-Warning "svcl.exe not found at configured path '$($config.svcl_path)' - cannot reset volumes"
+                return
+            }
+
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Resetting all app volumes to 100%..." -ForegroundColor Cyan
+
+            Start-Process -FilePath $config.svcl_path -ArgumentList '/SetVolume AllAppVolume 100' -Wait -NoNewWindow
+        }
+    }
+
+
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
@@ -2174,6 +2192,11 @@ public class DisplaySettings
                     # ProcessPriorityClass]::Idle is what Task Manager calls "Low"
                 }
 
+                if ($null -ne $config.reset_volumes_on_throttle -and $config.reset_volumes_on_throttle -eq $true)
+                {
+                    Reset-AppVolumes
+                }
+
                 # Minimise windows of all target processes
                 Write-Host "**** Minimizing target process windows..."
 
@@ -2353,6 +2376,11 @@ public class DisplaySettings
                         Write-Host "At line: $($_.InvocationInfo.ScriptLineNumber) in $($_.InvocationInfo.ScriptName)"
                         Write-Host $_.InvocationInfo.Line
                     }
+                }
+
+                if ($null -ne $config.reset_volumes_on_restore -and $config.reset_volumes_on_restore -eq $true)
+                {
+                    Reset-AppVolumes
                 }
 
                 if ($CheckOnce)
