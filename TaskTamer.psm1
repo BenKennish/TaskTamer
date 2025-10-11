@@ -2282,7 +2282,7 @@ public class DisplaySettings
                     $runningTriggerProcesses | Wait-Process
                 }
 
-                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** All trigger processes have exited"
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** All trigger processes have exited" -ForegroundColor Green
 
                 if ($config['low_priority_waiting'])
                 {
