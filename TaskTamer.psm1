@@ -1856,16 +1856,24 @@ public class DisplaySettings
 
             #Start-Process -FilePath $config.svcl_path -ArgumentList '/SetVolume AllAppVolume 100' -Wait -NoNewWindow
 
-            $output = & $config.svcl_path /SetVolume /AllAppVolume 100
+            $output = ((& $config.svcl_path /SetVolume /AllAppVolume 100) -join "`n").Trim()
             $exitCode = $LASTEXITCODE
 
             if ($exitCode -ne 0)
             {
-                Write-Warning "svcl.exe exited with code $exitCode : `n$($output -join "`n")"
+                Write-Warning "svcl.exe exited with code $exitCode"
+                if ($output)
+                {
+                    Write-Warning "Output: $output"
+                }
             }
             else
             {
-                Write-Host "svcl.exe output:`n$($output -join "`n")"
+                Write-Verbose "svcl reset volumes successfully."
+                if ($output)
+                {
+                    Write-Host "svcl Output: $output"
+                }
             }
 
         }
@@ -2079,7 +2087,7 @@ public class DisplaySettings
                     # FIXME: this will wait for each trigger process instance found
                     if ($config['delay_before_monitor_trigger_close'] -and $config['delay_before_monitor_trigger_close'] -gt 0)
                     {
-                        Write-Host "**** Waiting for $($config['delay_before_monitor_trigger_close'])s before monitoring for trigger process exit..." -ForegroundColor Cyan
+                        Write-Host "**** Waiting for $($config['delay_before_monitor_trigger_close'])s before checking for trigger process exit..." -ForegroundColor Cyan
                         Start-Sleep -Seconds $config['delay_before_monitor_trigger_close']
                     }
 
