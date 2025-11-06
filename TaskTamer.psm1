@@ -1840,6 +1840,8 @@ public class DisplaySettings
 
 
     # resets sound devices and volumes for all apps to the recommended defaults
+    # uses https://www.nirsoft.net/utils/sound_volume_command_line.html
+    # NOTE: only sets volumes of currently open applications
     function Reset-AppVolumes
     {
         if ($config.svcl_path)
@@ -1852,7 +1854,20 @@ public class DisplaySettings
 
             Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Resetting all app volumes to 100%..." -ForegroundColor Cyan
 
-            Start-Process -FilePath $config.svcl_path -ArgumentList '/SetVolume AllAppVolume 100' -Wait -NoNewWindow
+            #Start-Process -FilePath $config.svcl_path -ArgumentList '/SetVolume AllAppVolume 100' -Wait -NoNewWindow
+
+            $output = & $config.svcl_path /SetVolume /AllAppVolume 100
+            $exitCode = $LASTEXITCODE
+
+            if ($exitCode -ne 0)
+            {
+                Write-Warning "svcl.exe exited with code $exitCode : `n$($output -join "`n")"
+            }
+            else
+            {
+                Write-Host "svcl.exe output:`n$($output -join "`n")"
+            }
+
         }
     }
 
@@ -2061,6 +2076,13 @@ public class DisplaySettings
                         Write-Warning "This trigger process is not running with PriorityBoost enabled"
                     }
 
+                    # FIXME: this will wait for each trigger process instance found
+                    if ($config['delay_before_monitor_trigger_close'] -and $config['delay_before_monitor_trigger_close'] -gt 0)
+                    {
+                        Write-Host "**** Waiting for $($config['delay_before_monitor_trigger_close'])s before monitoring for trigger process exit..." -ForegroundColor Cyan
+                        Start-Sleep -Seconds $config['delay_before_monitor_trigger_close']
+                    }
+
                     if ($config['show_notifications'])
                     {
                         New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "Minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath -UniqueIdentifier "TaskTamer" -Sound IM -Header $notificationsHeader
@@ -2173,6 +2195,7 @@ public class DisplaySettings
                         }
                     }
                 }
+                # end foreach trigger process
 
                 # output $targetProcessesConfig for debugging
                 if ($processedTargetProcessOverridesFor.Keys.Count -gt 0)
