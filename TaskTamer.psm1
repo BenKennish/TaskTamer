@@ -86,6 +86,8 @@ e.g. for Minecraft "jawaw".exe look for "*minecraft*"" in the cmd line args
 
 TODO: display action taken in a column of the table, e.g. 'suspended', 'deprioritized', 'closed'
 
+TODO: can we enable HDR during the same steps as changing resolution?
+
 #>
 
 # used to store data about a target process pre-taming/throttling
@@ -1839,6 +1841,85 @@ public class DisplaySettings
     }
 
 
+    # use HDRCmd.exe to get retrieve the current HDR status
+    # returns either $true (enabled), $false (disabled) or $null (HDR not supported / error)
+    function Get-HDRStatus
+    {
+        if ($config -and $config.hdrcmd_path)
+        {
+            if (-not (Test-Path -Path $config.hdrcmd_path))
+            {
+                Write-Warning "HDRCmd.exe not found at configured path '$($config.hdrcmd_path)'"
+                return $null
+            }
+
+            $output = ((& $config.hdrcmd_path status --mode exitcode) -join "`n").Trim()
+            $exitCode = $LASTEXITCODE
+
+            switch ($exitCode)
+            {
+                0 { return $true }  # HDR enabled
+                1 { return $false } # HDR disabled
+                2 { return $null }  # HDR not supported
+                default
+                {
+                    Write-Warning "HDRCmd.exe returned unknown exit code $exitCode"
+                    Write-Warning "Output: $output"
+                    return $null
+                }
+            }
+        }
+        else
+        {
+            Write-Warning "hdrcmd_path not configured in config.yaml"
+            return $null
+        }
+    }
+
+    # euse HDRCmd.exe to get enable or disable HDR status
+    function Set-HDRStatus
+    {
+        param (
+            [Parameter(Mandatory = $true)]
+            [bool]$Enabled
+        )
+
+        if ($config -and $config.hdrcmd_path)
+        {
+            if (-not (Test-Path -Path $config.hdrcmd_path))
+            {
+                Write-Warning "HDRCmd.exe not found at configured path '$($config.hdrcmd_path)' - cannot enable/disable HDR"
+                return
+            }
+
+            $arg = if ($Enabled) { 'on' } else { 'off' }
+
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Setting HDR to '$arg'..." -ForegroundColor Cyan
+
+            $output = ((& $config.hdrcmd_path $arg) -join "`n").Trim()
+            $exitCode = $LASTEXITCODE
+
+            if ($exitCode -ne 0)
+            {
+                Write-Warning "HDRCmd.exe exited with code $exitCode"
+                if ($output)
+                {
+                    Write-Warning "Output: $output"
+                }
+            }
+            else
+            {
+                Write-Verbose "HDRCmd.exe set HDR status successfully."
+                if ($output)
+                {
+                    Write-Host "HDRCmd.exe Output: $output"
+                }
+            }
+        }
+    }
+
+
+
     # resets sound devices and volumes for all apps to the recommended defaults
     # uses https://www.nirsoft.net/utils/sound_volume_command_line.html
     # NOTE: only sets volumes of currently open applications
@@ -2065,6 +2146,9 @@ public class DisplaySettings
             # stores the previous resolution if a trigger process configuration requires switching resolution
             $previousResolution = $null
 
+            # stores the previous HDR state if a trigger process configuration requires enabling/disabling HDR
+            $previousHDRStatus = $null
+
             # NB: hashtables are case INsensitive w.r.t. their keys by default
             $runningTriggerProcesses = Get-Process | Where-Object { $config['trigger_processes'].ContainsKey($_.Name) }
 
@@ -2202,6 +2286,36 @@ public class DisplaySettings
                             Write-Warning "Set-DisplayMode failed, continuing with the current resolution"
                         }
                     }
+
+                    # TODO: perhaps we can enable HDR at the same time as changing resolution?
+
+                    if ($null -eq $previousHDRStatus -and
+                        $config['trigger_processes'][$runningTriggerProcess.Name] -and $config['trigger_processes'][$runningTriggerProcess.Name].ContainsKey('enable_hdr'))
+                    {
+                        $enableHDR = $config['trigger_processes'][$runningTriggerProcess.Name]['enable_hdr'];
+
+                        if ($enableHDR -isnot [bool])
+                        {
+                            throw "Invalid enable_hdr value specified in config for trigger process '$($runningTriggerProcess.Name)': $enableHDR"
+                        }
+
+                        # Save current HDR status to restore when trigger process exits
+                        $previousHDRStatus = Get-HDRStatus
+
+                        if ($null -eq $previousHDRStatus)
+                        {
+                            # Get-HDRStatus returning null suggests HDR is not supported or an error occurred
+                            Write-Warning "enabled_hdr is set but HDR is not supported or an error occured establishing HDR status"
+                            continue
+                        }
+                        else
+                        {
+                            # Set HDR status
+                            Set-HDRStatus -Enabled $enableHDR
+                        }
+                    }
+
+                    # could just break here if we only want to process the first trigger process
                 }
                 # end foreach trigger process
 
@@ -2334,6 +2448,16 @@ public class DisplaySettings
                     }
                     $previousResolution = $null
                 }
+
+
+                if ($null -ne $previousHDRStatus)
+                {
+                    # Restore original HDR status
+                    #Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Restoring HDR status" -ForegroundColor Cyan
+                    Set-HDRStatus -Enabled $previousHDRStatus
+                    $previousHDRStatus = $null
+                }
+
 
                 if ($config['show_notifications'])
                 {

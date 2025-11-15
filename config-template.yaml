@@ -76,6 +76,7 @@ trigger_processes:
             -Spotify:  # music
 
     "Overwatch":
+        enable_hdr: true
         target_process_overrides:
             Explorer:
                 action: deprioritize
@@ -120,9 +121,13 @@ svcl_path: 'C:\Users\ben\AppData\Local\svcl\svcl.exe'
 reset_volumes_on_throttle: true
 reset_volumes_on_restore: true
 
+# location of the HDRCmd.exe binary for use in enabling/disabling HDR
+# see: https://github.com/res2k/HDRTray/
+hdrcmd_path: 'C:\Users\ben\AppData\Local\HDRTray-v0.5.5\HDRCmd.exe'
+
 # number of seconds to wait when a trigger process is detected
 # before we start listening for it's closure
 #
 # useful for games that restart themselves after a quick update to the .exe
 # (e.g. gw2-64.exe)
-delay_before_monitor_trigger_close: 5
+delay_before_monitor_trigger_close: 0
