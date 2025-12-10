@@ -1385,16 +1385,20 @@ function Invoke-TaskTamer
                 }
 
                 # Get the parent process ID
-                $parentProcessId = (Get-WmiObject Win32_Process -Filter "ProcessId = $($currentProcess.Id)").ParentProcessId
+                $parentProcessId = $null
+                if ($currentProcess.PSObject.Properties['ParentProcessId'])
+                {
+                    $parentProcessId = (Get-WmiObject Win32_Process -Filter "ProcessId = $($currentProcess.Id)").ParentProcessId
+                }
 
-                # Break if there is no parent (reached the top of the process tree)
                 if (-not $parentProcessId)
                 {
+                    # reached the top of the process tree
                     Write-Verbose "No parent process found for '$($Process.Name)'."
                     return
                 }
 
-                # Get the parent process
+                # Examine the parent process
                 $currentProcess = Get-Process -Id $parentProcessId -ErrorAction SilentlyContinue
 
                 if (-not $currentProcess)
@@ -1408,9 +1412,7 @@ function Invoke-TaskTamer
             }
             catch
             {
-                # Get the call stack
-                $callStack = Get-PSCallStack
-                throw "An error occurred while retrieving information about the process: $($currentProcess.Name) on line $($callStack[0].ScriptLineNumber) : $_"
+                throw "An error occurred while retrieving information about the process $($currentProcess.Name): $_"
             }
         }
 
