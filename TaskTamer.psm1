@@ -1382,16 +1382,18 @@ function Invoke-TaskTamer
                     return $currentProcess.Name
                 }
 
-                # Get the parent process ID
+                # Get the Win32_Process object
+                $win32Process = (Get-WmiObject Win32_Process -Filter "ProcessId = $($currentProcess.Id)")
+
                 $parentProcessId = $null
-                if ($currentProcess.PSObject.Properties['ParentProcessId'])
+                if ($win32Process.PSObject.Properties['ParentProcessId'])
                 {
-                    $parentProcessId = (Get-WmiObject Win32_Process -Filter "ProcessId = $($currentProcess.Id)").ParentProcessId
+                    $parentProcessId = $win32Process.ParentProcessId
                 }
 
                 if (-not $parentProcessId)
                 {
-                    # reached the top of the process tree
+                    # this process has no parent - we've reached the top of the process tree
                     Write-Verbose "No parent process found for '$($Process.Name)'."
                     return
                 }
@@ -1401,7 +1403,7 @@ function Invoke-TaskTamer
 
                 if (-not $currentProcess)
                 {
-                    Write-Verbose "Parent process (PID: $parentProcessId) no longer running for '$($process.Name)'."
+                    Write-Verbose "Parent process (PID: $parentProcessId) no longer running for '$($Process.Name)'."
                     return
                 }
 
@@ -1414,7 +1416,7 @@ function Invoke-TaskTamer
             }
         }
 
-        Write-Verbose "No launcher found for game: $($gameProcess.Name)."
+        Write-Verbose "No launcher found for trigger process: $($Process.Name)."
         return $null
     }
 
