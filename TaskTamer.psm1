@@ -41,17 +41,13 @@ steam    | TOTAL | 0.8GB |        | ignored       | Launcher for GW2-64
 
 TODO: target_processes_override currently only works at the first depth level of the hashmap.   e.g. if there is an entry in there for 'Solitaire', it won't merge
 
-TODO: Hide PID column when collapsing processes by name
+TODO: Hide PID column when collapsing processes by name rather than showing "TOTAL:"
 
 TODO: consider rename to AutoTaskTamer (ATT)
 
 TODO: get window minimising working for WhatsApp and other Store apps, and restore all windows that were minimized when the trigger process ran
 
 TODO: get the grouped processes mode (default) working better w.r.t. output
-
-TODO: allow a list of NON-target processes, i.e. TaskTamer should target all OTHER processes
-       (running as the user, won't include SYSTEM processes)
-       NOTE: very likely to suspend things that will cause problems tho
 
 TODO: if user tries to focus any suspended target process (before game has been closed), resume it temporarily.
       this gets quite complicated to do in a way that doesn't potentially increase load on the system
@@ -87,6 +83,8 @@ e.g. for Minecraft "jawaw".exe look for "*minecraft*"" in the cmd line args
 TODO: display action taken in a column of the table, e.g. 'suspended', 'deprioritized', 'closed'
 
 TODO: can we enable HDR during the same steps as changing resolution?
+
+TODO: keep a list of PIDs that we suspended and then just unsuspend those rather than searching by name again
 
 #>
 
@@ -1177,7 +1175,7 @@ function Invoke-TaskTamer
                                 }
                                 catch
                                 {
-                                    Write-Warning "Failed to suspend $($proc.Name) ($($proc.ID)):`n$_"
+                                    Write-Warning "Failed to suspend $($proc.Name) ($($proc.ID)): $_"
                                 }
                             }
                             elseif ($Restore)
@@ -1188,7 +1186,7 @@ function Invoke-TaskTamer
                                 }
                                 catch
                                 {
-                                    Write-Warning "Failed to resume $($proc.Name) ($($proc.ID)):`n$_"
+                                    Write-Warning "Failed to resume $($proc.Name) ($($proc.ID)): $_"
                                 }
                             }
                         }
