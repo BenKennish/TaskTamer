@@ -110,16 +110,12 @@ low_priority_waiting: false
 # "1.000000" (moves the UI closer to the centre of the screen)
 overwatch2_config_patch: true
 
-# location of the svcl.exe binary for use in resetting app volumes
-# leave blank to disable volume resetting
-# see: https://www.nirsoft.net/utils/sound_volume_command_line.html
-svcl_path: 'C:\Users\ben\AppData\Local\svcl\svcl.exe'
-#
-# when to reset all application volumes to 100%
-# throttle : when a trigger process starts
-# restore  : when a trigger process ends
-reset_volumes_on_throttle: true
-reset_volumes_on_restore: true
+exec_post_throttle:
+   - 'echo This is a post throttle echo command'
+
+exec_post_restore:
+   - 'echo This is a post restore echo command'
+
 
 # location of the HDRCmd.exe binary for use in enabling/disabling HDR
 # see: https://github.com/res2k/HDRTray/

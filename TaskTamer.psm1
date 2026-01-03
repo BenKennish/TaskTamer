@@ -9,61 +9,45 @@ you can manually import this module using:
 
 ----------- TODO list --------------
 
+Change the output tables to look more like this:
 
-Desired output:
+==== Throttling....
+Process  | # | RAM     | Action    | Res | Details
+------------------------------------------------------
+brave    | 8 | 1.67GB  | suspended | 🟡 | err with PIDs 1234 (Access Denied)
+explorer | 1 | 128.0MB | priority  | 🟢 | Normal -> BelowNormal
+Signal   | 2 | 256.0MB | closed    | 🔴 | Failed - unimplemented
+steam    | 1 | 0.8GB   | ignored   | 🟣 | Launcher for GW2-64
 
-Throttling....
-
-Process  | PID   | RAM   | ACTION        | DETAILS
--------------------------------------------------------------
-brave    | TOTAL | 5.2GB | suspended     |
-explorer | TOTAL | 1.2GB | deprioritised | Normal -> BelowNormal
-Signal   | TOTAL | 1.2GB | closed        | Failed - unimplemented
-steam    | TOTAL | 0.8GB | ignored       | Launcher for GW2-64
-
-or maybe:
-
-Process  | RAM   | ACTION        | DETAILS
--------------------------------------------------------------
-brave    | 5.2GB | suspended     | err PID 1234
-explorer | 1.2GB | deprioritised | Normal -> BelowNormal
-Signal   | 1.2GB | closed        | Failed - unimplemented
-steam    | 0.8GB | ignored       | Launcher for GW2-64
+==== Restoring....
+Process  | # | RAM    | ΔRAM   | Action   | Details
+--------------------------------------------------------------
+brave    | 8 | 1.47GB | -200MB | resumed  |
+explorer | 1 | 1.2GB  |        | priority | BelowNormal -> Normal
+Signal   | 2 | 1.2GB  |        | opened   | Failed - unimplemented
+steam    | 1 | 0.8GB  |        | ignored  | Launcher for GW2-64
 
 
-Restoring....
-Process  | PID   | RAM   | ΔRAM   | ACTION        | DETAILS
--------------------------------------------------------------
-brave    | TOTAL | 5.0GB | -200MB | unsuspended   |
-explorer | TOTAL | 1.2GB |        | reprioritised | BelowNormal -> Normal
-Signal   | TOTAL | 1.2GB |        | opened        | Failed - unimplemented
-steam    | TOTAL | 0.8GB |        | ignored       | Launcher for GW2-64
+TODO: auto restore all windows that were minimized when the trigger process ran
 
-TODO: target_processes_override currently only works at the first depth level of the hashmap.   e.g. if there is an entry in there for 'Solitaire', it won't merge
+TODO: allow wildcard '*' in process names in config.yaml (e.g. '*Fortnite*')
 
-TODO: Hide PID column when collapsing processes by name rather than showing "TOTAL:"
+TODO: allow filtering by process cmd line args
+e.g. for Minecraft "jawaw".exe look for "*minecraft*"" in the cmd line args
 
-TODO: consider rename to AutoTaskTamer (ATT)
+TODO: can we enable HDR during the same steps as changing resolution?
 
-TODO: get window minimising working for WhatsApp and other Store apps, and restore all windows that were minimized when the trigger process ran
+TODO: restoring should be done using a list of processes that we tamed, rather than just searching by name again
 
-TODO: get the grouped processes mode (default) working better w.r.t. output
+TODO: consider rename to AutoTaskTamer or AutoTaskThrottler (ATT) .. because it does things automatically! and att is a cool acronym :)
 
-TODO: if user tries to focus any suspended target process (before game has been closed), resume it temporarily.
-      this gets quite complicated to do in a way that doesn't potentially increase load on the system
-      as it can require repeatedly polling in a while() loop
-      OR
-      perhaps just detect when a game loses focus and then restore everything and tame them when it gains focus again
-      (probably not a good idea in case the game has performance issues and temporarily loses focus)
-      OR
-      they could just manually ctrl-C the script and then run it again before restoring the game app
+TODO: get window minimising working for WhatsApp and other Store apps
 
-TODO: allow user to temporarily restore all target processes by pressing a key and then to retame them with a re-press
-      AND
-      press a key to untame all target processes and suspend all *trigger* processes, then press it again to revert
+TODO: a way to auto scan for trigger apps or allow users to select them from the shortcuts within start Menu
 
 TODO: other ways to improve performance
     - run user configurable list of commands when detecting a game  e.g. wsl --shutdown
+
     - adjust windows visual settings
           Set registry key for best performance in visual effects
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2
@@ -73,18 +57,11 @@ TODO: other ways to improve performance
         $process = Get-Process -Name 'SomeProcess'
         $process.ProcessorAffinity = 0x0000000F # Adjust based on available cores
 
-TODO: a way to auto scan for trigger apps or allow users to select them from the shortcuts within start Menu
+TODO: allow user to temporarily restore all target processes by pressing a key and then to retame them with a re-press
+      AND
+      press a key to untame all target processes and suspend all *trigger* processes, then press it again to revert
 
-TODO: allow wildcard '*' in process names in config.yaml (e.g. '*Fortnite*')
-
-TODO: allow filtering by process cmd line args
-e.g. for Minecraft "jawaw".exe look for "*minecraft*"" in the cmd line args
-
-TODO: display action taken in a column of the table, e.g. 'suspended', 'deprioritized', 'closed'
-
-TODO: can we enable HDR during the same steps as changing resolution?
-
-TODO: keep a list of PIDs that we suspended and then just unsuspend those rather than searching by name again
+TODO: ( i dont know what this means anymore)  target_processes_override currently only works at the first depth level of the hashmap.   e.g. if there is an entry in there for 'Solitaire', it won't merge
 
 #>
 
@@ -1925,6 +1902,8 @@ public class DisplaySettings
     # resets sound devices and volumes for all apps to the recommended defaults
     # uses https://www.nirsoft.net/utils/sound_volume_command_line.html
     # NOTE: only sets volumes of currently open applications
+
+    <#
     function Reset-AppVolumes
     {
         if ($config.svcl_path)
@@ -1960,6 +1939,54 @@ public class DisplaySettings
             }
 
         }
+    }
+    #>
+
+
+    # run a series of custom commands supplied as an array of strings
+    function Invoke-CustomCmds
+    {
+        param (
+            [Parameter(Mandatory = $true)]
+            [string[]]$Commands
+        )
+
+        Write-Verbose "Invoking custom commands..."
+
+        foreach ($cmd in $Commands)
+        {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Executing: $cmd" -ForegroundColor Cyan
+
+            try
+            {
+                $output = cmd /c $cmd 2>&1
+            }
+            catch
+            {
+                Write-Warning "Failed to execute command '$cmd': $_"
+            }
+            $exitCode = $LASTEXITCODE
+
+            if ($exitCode -ne 0)
+            {
+                Write-Warning "Command exited with exit code $exitCode"
+                if ($output)
+                {
+                    Write-Warning "Output: $output"
+                }
+            }
+            else
+            {
+                Write-Verbose "Command executed successfully."
+                if ($output)
+                {
+                    Write-Host "Output: $output"
+                }
+            }
+        }
+
+        Write-Verbose "Finished invoking custom commands."
+
     }
 
 
@@ -2339,11 +2366,6 @@ public class DisplaySettings
                     # ProcessPriorityClass]::Idle is what Task Manager calls "Low"
                 }
 
-                if ($null -ne $config.reset_volumes_on_throttle -and $config.reset_volumes_on_throttle -eq $true)
-                {
-                    Reset-AppVolumes
-                }
-
                 # Minimise windows of all target processes
                 Write-Host "**** Minimizing target process windows..."
 
@@ -2381,6 +2403,13 @@ public class DisplaySettings
                 $throttledProcesses = $true
 
                 Set-TargetProcessesState -Throttle -Launcher $launcher | Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS -ColumnFormats $COLUMN_FORMATS
+
+                if ($config['exec_post_throttle'])
+                {
+                    Write-Verbose "Invoking post-throttle custom commands..."
+                    Invoke-CustomCmds -Commands $config['exec_post_throttle']
+                }
+
 
                 if ($PollTriggers)
                 {
@@ -2430,6 +2459,7 @@ public class DisplaySettings
                 }
 
                 Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** All trigger processes have exited" -ForegroundColor Green
+
 
                 if ($config['low_priority_waiting'])
                 {
@@ -2535,10 +2565,13 @@ public class DisplaySettings
                     }
                 }
 
-                if ($null -ne $config.reset_volumes_on_restore -and $config.reset_volumes_on_restore -eq $true)
+
+                if ($config['exec_post_restore'])
                 {
-                    Reset-AppVolumes
+                    Write-Verbose "Invoking post-restore custom commands..."
+                    Invoke-CustomCmds -Commands $config['exec_post_restore']
                 }
+
 
                 if ($CheckOnce)
                 {
