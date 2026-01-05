@@ -15,7 +15,7 @@ Change the output tables to look more like this:
 Process  | # | RAM     | Action    | Res | Details
 ------------------------------------------------------
 brave    | 8 | 1.67GB  | suspended | 🟡 | err with PIDs 1234 (Access Denied)
-explorer | 1 | 128.0MB | priority  | 🟢 | Normal -> BelowNormal
+explorer | 1 | 128.0MB | priority  | 🟢 | Normal -> Idle
 Signal   | 2 | 256.0MB | closed    | 🔴 | Failed - unimplemented
 steam    | 1 | 0.8GB   | ignored   | 🟣 | Launcher for GW2-64
 
@@ -23,10 +23,15 @@ steam    | 1 | 0.8GB   | ignored   | 🟣 | Launcher for GW2-64
 Process  | # | RAM    | ΔRAM   | Action   | Details
 --------------------------------------------------------------
 brave    | 8 | 1.47GB | -200MB | resumed  |
-explorer | 1 | 1.2GB  |        | priority | BelowNormal -> Normal
+explorer | 1 | 1.2GB  |        | priority | Idle -> Normal
 Signal   | 2 | 1.2GB  |        | opened   | Failed - unimplemented
 steam    | 1 | 0.8GB  |        | ignored  | Launcher for GW2-64
 
+TODO: use ntdll.dll NtSuspendProcess and NtResumeProcess instead of suspending each thread individually
+
+TODO: use taskkill /IM notepad.exe /T (without /F) to gracefully close processes (and maybe use /F if that fails)
+      many brave.exe processes can only be terminated forcefully
+        try   ?
 
 TODO: auto restore all windows that were minimized when the trigger process ran
 
