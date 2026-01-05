@@ -27,15 +27,22 @@ explorer | 1 | 1.2GB  |        | priority | Idle -> Normal
 Signal   | 2 | 1.2GB  |        | opened   | Failed - unimplemented
 steam    | 1 | 0.8GB  |        | ignored  | Launcher for GW2-64
 
-TODO: use ntdll.dll NtSuspendProcess and NtResumeProcess instead of suspending each thread individually
 
-TODO: use taskkill /IM notepad.exe /T (without /F) to gracefully close processes (and maybe use /F if that fails)
+TODO: process groups > 1 in size should be suspended as follows:
+      start with brave.exe processes that don't have a brave.exe process as a parent
+      then resume in the REVERSE order
+
+
+TODO: implement 'close' using taskkill /IM notepad.exe /T (without /F) to gracefully close processes (and maybe use /F if that fails)
       many brave.exe processes can only be terminated forcefully
-        try   ?
+        try brave.exe -no-sandbox --disable-gpu --quit  ?
 
 TODO: auto restore all windows that were minimized when the trigger process ran
 
-TODO: allow wildcard '*' in process names in config.yaml (e.g. '*Fortnite*')
+FIXME: wildcard in process names in config doesnt work because some of the code expects the process name to exactly match the config key
+       and 'WhatsApp.root' is not equal to 'WhatsApp*' and 'FortniteClient-Win64-Shipping' is not equal to 'Fortnite*'
+
+TODO: use ntdll.dll NtSuspendProcess and NtResumeProcess instead of suspending each thread individually
 
 TODO: allow filtering by process cmd line args
 e.g. for Minecraft "jawaw".exe look for "*minecraft*"" in the cmd line args
@@ -942,7 +949,16 @@ function Invoke-TaskTamer
             # and any other sessions
             # (we could check to see if we are running as Adminsitrator tho)
 
-            $runningTargetProcesses = Get-Process | Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) -and $targetProcessesConfig.ContainsKey($_.Name) }
+            Write-Verbose "Searching for target processes: $(("'" + ($targetProcessesConfig.Keys -join "','") + "'"))"
+
+            # we sort by start time so we are more likely to be taking action on parent processes before their children
+            $runningTargetProcesses = Get-Process -Name @($targetProcessesConfig.Keys) -ErrorAction SilentlyContinue | Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) } | Sort-Object ProcessName, StartTime
+
+
+            #$runningTargetProcesses = Get-Process | Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) -and $targetProcessesConfig.ContainsKey($_.Name) }
+
+            # if we want to be safer, we could insist on never taming (throttling) processes if they have a parent process that is due to be throttled
+            # see https://www.perplexity.ai/search/i-want-to-suspend-pause-the-ex-kFukMz0QTn6gxFOh602MeQ, "Top-down Chrome suspension (parents before children)"
 
             $numTargetedProcesses = 0
 
@@ -1364,8 +1380,8 @@ function Invoke-TaskTamer
                     return $currentProcess.Name
                 }
 
-                # Get the Win32_Process object
-                $win32Process = (Get-WmiObject Win32_Process -Filter "ProcessId = $($currentProcess.Id)")
+                # Get the Win32_Process object (contains ParentProcessId, unlike Get-Process cmdlet)
+                $win32Process = (Get-CimInstance Win32_Process -Filter "ProcessId = $($currentProcess.Id)")
 
                 $parentProcessId = $null
                 if ($win32Process.PSObject.Properties['ParentProcessId'])
@@ -1995,6 +2011,78 @@ public class DisplaySettings
     }
 
 
+    # suspend all processes with a given name, starting with the oldest generation and ending with the leaves
+    function Suspend-ProcessGroup
+    {
+        param (
+            [Parameter(Mandatory = $true)]
+            [string]$Name
+        )
+
+        # Get all processes with the specified name
+        $processes = Get-CimInstance Win32_Process -Filter "Name = '$Name'"
+
+        # Build parent -> children mapping and root processes
+        $parentToChildren = @{}
+        $allProcessPids = @{}
+        $procByPid = @{}
+
+        foreach ($proc in $processes)
+        {
+            $allProcessPids[$proc.ProcessId] = $true
+            $procByPid[$proc.ProcessId] = $proc
+            $parentToChildren[$proc.ProcessId] = @()
+        }
+
+        # Build parent -> same process children relationships
+        foreach ($proc in $processes)
+        {
+            $parentPid = $proc.ParentProcessId
+            if ($allProcessPids.ContainsKey($parentPid))
+            {
+                $parentToChildren[$parentPid] += $proc.ProcessId
+            }
+        }
+
+        # Find root Chrome processes (no Chrome parent = parentPid not in allChromePids)
+        $roots = $chromeProcs | Where-Object {
+            $parentPid = $_.ParentProcessId
+            -not $allChromePids.ContainsKey($parentPid)
+        } | ForEach-Object { $_.ProcessId }
+
+        $suspended = @{}
+        $queue = [System.Collections.Queue]::new()
+        $queue.EnqueueRange($roots)
+
+        while ($queue.Count -gt 0)
+        {
+            $procId = $queue.Dequeue()
+            if ($suspended.ContainsKey($procId)) { continue }
+
+            Write-Host "Suspending chrome.exe PID $pid (parent first)"
+            if ([ProcessSuspend]::SuspendProcess($procId))
+            {
+                $suspended[$pid] = $true
+
+                # Add all its Chrome children to queue (now safe to suspend)
+                foreach ($childPid in $parentToChildren[$procId])
+                {
+                    if (-not $suspended.ContainsKey($childPid))
+                    {
+                        $queue.Enqueue($childPid)
+                    }
+                }
+            }
+        }
+
+        Write-Host "Suspended $($suspended.Count) chrome.exe processes top-down"
+        return $suspended.Keys
+    }
+
+
+
+
+
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
@@ -2175,6 +2263,8 @@ public class DisplaySettings
 
         $launcher = ""
 
+        Write-Verbose "Searching for trigger processes: $("'" + ($config['trigger_processes'].Keys -join "','") + "'")"
+
         while ($true)
         {
             # stores the previous resolution if a trigger process configuration requires switching resolution
@@ -2184,7 +2274,12 @@ public class DisplaySettings
             $previousHDRStatus = $null
 
             # NB: hashtables are case INsensitive w.r.t. their keys by default
-            $runningTriggerProcesses = Get-Process | Where-Object { $config['trigger_processes'].ContainsKey($_.Name) }
+
+            # Get-Process allows specifying multiple process names AND allows use of * wildcards...
+            # Get-Process -Name 'notepad,epic*,brave,msedge*'
+
+            #$runningTriggerProcesses = Get-Process | Where-Object { $config['trigger_processes'].ContainsKey($_.Name) }
+            $runningTriggerProcesses = Get-Process -Name @($config['trigger_processes'].Keys) -ErrorAction SilentlyContinue
 
             if ($runningTriggerProcesses)
             {
@@ -2399,6 +2494,12 @@ public class DisplaySettings
                     {
                         Write-Error "!!!! Failed to minimize: $($proc.Name) ($($proc.Id)). Error: $_";
                     }
+                }
+
+                if ($config['exec_pre_throttle'])
+                {
+                    Write-Verbose "Invoking pre-throttle custom commands..."
+                    Invoke-CustomCmds -Commands $config['exec_pre_throttle']
                 }
 
                 # Wait a short time before suspending to ensure minimize commands have been processed

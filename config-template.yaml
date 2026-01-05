@@ -110,12 +110,16 @@ low_priority_waiting: false
 # "1.000000" (moves the UI closer to the centre of the screen)
 overwatch2_config_patch: true
 
+exec_pre_throttle:
+   - 'echo This is a pre throttle echo command'
+
 exec_post_throttle:
+   - 'C:\Users\ben\AppData\Local\svcl\svcl.exe /SetVolume /AllAppVolume 100'
    - 'echo This is a post throttle echo command'
 
 exec_post_restore:
-   - 'echo This is a post restore echo command'
-
+   - 'C:\Users\ben\AppData\Local\svcl\svcl.exe /SetVolume /AllAppVolume 100'
+#   - 'no-such-cmd'
 
 # location of the HDRCmd.exe binary for use in enabling/disabling HDR
 # see: https://github.com/res2k/HDRTray/
