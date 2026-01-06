@@ -951,9 +951,20 @@ function Invoke-TaskTamer
 
             Write-Verbose "Searching for target processes: $(("'" + ($targetProcessesConfig.Keys -join "','") + "'"))"
 
-            # we sort by start time so we are more likely to be taking action on parent processes before their children
-            $runningTargetProcesses = Get-Process -Name @($targetProcessesConfig.Keys) -ErrorAction SilentlyContinue | Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) } | Sort-Object ProcessName, StartTime
+            # sort order of StartTime...
+            #   for throttling is ascending so that parents are throttled before children (hacky)
+            #   for restoring is descending so that children are resumed before parents (hacky)
+            $sortProperties = @(
+                @{Expression = "ProcessName"; Descending = $false },
+                @{Expression = "StartTime"; Descending = ( $Restore -as [bool] ) }
+            )
 
+            # doing tenary operator in PS5.1 (($test ? $truthy : $falsy)) ...
+            #   @($falsy, $truthy)[[bool]$test]
+
+            $runningTargetProcesses = Get-Process -Name @($targetProcessesConfig.Keys) -ErrorAction SilentlyContinue |
+            Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) } |
+            Sort-Object -Property $sortProperties
 
             #$runningTargetProcesses = Get-Process | Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) -and $targetProcessesConfig.ContainsKey($_.Name) }
 
