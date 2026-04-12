@@ -962,11 +962,21 @@ function Invoke-TaskTamer
             # doing tenary operator in PS5.1 (($test ? $truthy : $falsy)) ...
             #   @($falsy, $truthy)[[bool]$test]
 
-            $runningTargetProcesses = Get-Process -Name @($targetProcessesConfig.Keys) -ErrorAction SilentlyContinue |
-            Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) } |
-            Sort-Object -Property $sortProperties
+            $currentSessionId = (Get-Process -Id $PID).SessionId
 
-            #$runningTargetProcesses = Get-Process | Where-Object { $_.SI -eq ((Get-Process -Id $PID).SessionId) -and $targetProcessesConfig.ContainsKey($_.Name) }
+            $runningTargetProcesses = Get-Process -Name @($targetProcessesConfig.Keys) -ErrorAction SilentlyContinue |
+                Where-Object {
+                    try
+                    {
+                        ($_.SI -eq $currentSessionId) -and ($null -ne $_.StartTime)
+                    }
+                    catch
+                    {
+                        # error accessing one of the properties, e.g. the process exited
+                        $false
+                    }
+                } |
+                Sort-Object -Property $sortProperties
 
             # if we want to be safer, we could insist on never taming (throttling) processes if they have a parent process that is due to be throttled
             # see https://www.perplexity.ai/search/i-want-to-suspend-pause-the-ex-kFukMz0QTn6gxFOh602MeQ, "Top-down Chrome suspension (parents before children)"
