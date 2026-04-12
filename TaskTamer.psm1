@@ -1941,48 +1941,13 @@ public class DisplaySettings
 
 
 
-    # resets sound devices and volumes for all apps to the recommended defaults
-    # uses https://www.nirsoft.net/utils/sound_volume_command_line.html
-    # NOTE: only sets volumes of currently open applications
-
-    <#
+    # deletes the registry keys used to store volume levels and devices for all apps
+    #
     function Reset-AppVolumes
     {
-        if ($config.svcl_path)
-        {
-            if (-not (Test-Path -Path $config.svcl_path))
-            {
-                Write-Warning "svcl.exe not found at configured path '$($config.svcl_path)' - cannot reset volumes"
-                return
-            }
-
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Resetting all app volumes to 100%..." -ForegroundColor Cyan
-
-            #Start-Process -FilePath $config.svcl_path -ArgumentList '/SetVolume AllAppVolume 100' -Wait -NoNewWindow
-
-            $output = ((& $config.svcl_path /SetVolume /AllAppVolume 100) -join "`n").Trim()
-            $exitCode = $LASTEXITCODE
-
-            if ($exitCode -ne 0)
-            {
-                Write-Warning "svcl.exe exited with code $exitCode"
-                if ($output)
-                {
-                    Write-Warning "Output: $output"
-                }
-            }
-            else
-            {
-                Write-Verbose "svcl reset volumes successfully."
-                if ($output)
-                {
-                    Write-Host "svcl Output: $output"
-                }
-            }
-
-        }
+        Get-ChildItem -Path 'HKCU:\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore' |
+            Remove-Item -Recurse
     }
-    #>
 
 
     # run a series of custom commands supplied as an array of strings
