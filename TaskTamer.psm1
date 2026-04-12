@@ -32,6 +32,8 @@ TODO: process groups > 1 in size should be suspended as follows:
       start with brave.exe processes that don't have a brave.exe process as a parent
       then resume in the REVERSE order
 
+TODO: ability to manually cause a throttle operation by pressing 'T'
+      (using just the global settings, ignoring 'trigger_processes')
 
 TODO: implement 'close' using taskkill /IM notepad.exe /T (without /F) to gracefully close processes (and maybe use /F if that fails)
       many brave.exe processes can only be terminated forcefully
@@ -72,6 +74,8 @@ TODO: other ways to improve performance
 TODO: allow user to temporarily restore all target processes by pressing a key and then to retame them with a re-press
       AND
       press a key to untame all target processes and suspend all *trigger* processes, then press it again to revert
+
+TODO: switch resolution in a way that Windows settings recognises so that a monitor off event doesnt restore the resolution to what it was previously when it turns back on
 
 TODO: ( i dont know what this means anymore)  target_processes_override currently only works at the first depth level of the hashmap.   e.g. if there is an entry in there for 'Solitaire', it won't merge
 
@@ -243,7 +247,7 @@ function Invoke-TaskTamer
 
                 Write-Host "Previous TaskTamer didn't close properly.  Assuming crash and resuming all processes..."
                 Set-TargetProcessesState -Restore -NoDeltas |
-                Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS -ColumnFormats $COLUMN_FORMATS
+                    Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS -ColumnFormats $COLUMN_FORMATS
                 $ResumedAll.Value = $true
                 Remove-Item -Path $LockFilePath -Force
 
