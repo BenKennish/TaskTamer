@@ -74,6 +74,7 @@ TODO: other ways to improve performance
 TODO: allow user to temporarily restore all target processes by pressing a key and then to retame them with a re-press
       AND
       press a key to untame all target processes and suspend all *trigger* processes, then press it again to revert
+      so you can switch between "gaming" mode and "regular" mode.. NB: suspending online games might cause disconnects
 
 TODO: switch resolution in a way that Windows settings recognises so that a monitor off event doesnt restore the resolution to what it was previously when it turns back on
 
