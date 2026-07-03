@@ -56,10 +56,13 @@ target_processes:
     # unless they were used to launch the trigger process
     "Steam":
         is_launcher: true
-    "EpicGamesLauncher":
-        is_launcher: true
     "Battle.net":
         is_launcher: true
+    # Gemini: "Unlike Steam, which likes to maintain a constant tether to its active games,
+    # the Epic Games Launcher can be frozen or completely terminated mid-match without getting you kicked."
+    #
+    #"EpicGamesLauncher":
+    #    is_launcher: true
 
 # list of process names (filename without ".exe")
 # to act as triggers (e.g. video games)
