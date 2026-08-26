@@ -2683,6 +2683,8 @@ public class DisplaySettings
                         # this foreach handles the case of having multiple trigger processes running (unlikely but possible)
                         foreach ($runningTriggerProcess in $runningTriggerProcesses)
                         {
+
+                            # TODO: we could probably just edit the registry directly rather than using AppAudioConfig.exe
                             Write-Host "Setting saved volume for trigger process '$($runningTriggerProcess.Name)' to 100%"
                             Write-Verbose "Running: $($config['appaudioconfig_path']) /SetVolume 100 '$($runningTriggerProcess.Name).exe'"
                             & $config['appaudioconfig_path'] /SetVolume 100 "$($runningTriggerProcess.Name).exe"
