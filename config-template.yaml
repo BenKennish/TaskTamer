@@ -135,6 +135,10 @@ hdrcmd_path: 'C:\Users\ben\AppData\Local\HDRTray-v0.5.5\HDRCmd.exe'
 # this is a workaround for a bug with Discord's Global Attenuation feature, which can leave a closed trigger process with a lowered volume
 appaudioconfig_path: 'C:\Users\ben\AppData\Local\AppAudioConfig\AppAudioConfig.exe'
 
+# should we delete Windows' per-app volume settings for trigger processes when they close
+# this is a workaround for a bug with Discord's Global Attenuation feature, which can leave a closed trigger process with a lowered volume
+reset_trigger_process_volume_on_restore: true
+
 # number of seconds to wait when a trigger process is detected
 # before we start listening for it's closure
 #

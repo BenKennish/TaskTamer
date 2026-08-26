@@ -2071,7 +2071,29 @@ public class DisplaySettings
     }
 
 
+    function Remove-AppVolumeConfig
+    {
+        param
+        (
+            [Parameter(Mandatory = $true)]
+            [string]$ProcessName   # must include .exe suffix
+        )
 
+        $PropertyStorePath = 'HKCU:\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore'
+
+        if (-not (Test-Path $PropertyStorePath))
+        {
+            Write-Warning "PropertyStore key not found at: $PropertyStorePath"
+            return $null
+        }
+
+        $deletedKeys = Get-ChildItem -Path $PropertyStorePath |
+            Where-Object { $_.GetValue("") -like "*\\$($ProcessName)%b{*" } |
+            Remove-Item -PassThru -Recurse -Force -Verbose
+
+        return @($deletedKeys).Count
+
+    }
 
 
     # -------------------------------------------------------------------------
@@ -2689,6 +2711,18 @@ public class DisplaySettings
                             Write-Verbose "Running: $($config['appaudioconfig_path']) /SetVolume 100 '$($runningTriggerProcess.Name).exe'"
                             & $config['appaudioconfig_path'] /SetVolume 100 "$($runningTriggerProcess.Name).exe"
                         }
+                    }
+                }
+
+
+                if ($config['reset_trigger_process_volume_on_restore'])
+                {
+                    Write-Verbose "Resetting Windows per-app volume settings for trigger processes"
+                    foreach ($runningTriggerProcess in $runningTriggerProcesses)
+                    {
+                        Write-Host "Resetting Windows per-app volume settings for trigger process '$($runningTriggerProcess.Name)'"
+                        $numDeletedKeys = Remove-AppVolumeConfig -ProcessName "$($runningTriggerProcess.Name).exe"
+                        Write-Verbose "Removed $numDeletedKeys keys from PropertyStore for '$($runningTriggerProcess.Name).exe'"
                     }
                 }
 
