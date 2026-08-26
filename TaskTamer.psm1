@@ -2087,12 +2087,16 @@ public class DisplaySettings
             return $null
         }
 
-        $deletedKeys = Get-ChildItem -Path $PropertyStorePath |
-            Where-Object { $_.GetValue("") -like "*\\$($ProcessName)%b{*" } |
-            Remove-Item -PassThru -Recurse -Force -Verbose
+        $keysToRemove = @(Get-ChildItem -Path $PropertyStorePath |
+                Where-Object { $_.GetValue("") -like "*\\$($ProcessName)%b{*" })
 
-        return @($deletedKeys).Count
+        if ($keysToRemove.Count -gt 0)
+        {
+            $keysToRemove | Remove-Item -Recurse -Force -Verbose
+            return $keysToRemove.Count
+        }
 
+        return 0
     }
 
 
