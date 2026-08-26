@@ -2331,6 +2331,8 @@ public class DisplaySettings
                             # for any processes defined in the target_process_overrides that aren't already in $targetProcessesConfig (i.e. not listed in target_processes)
                             # we need to incorporate target_process_defaults first
 
+                            # NB: this gets run for EACH trigger process so if there is more than one and they are differently named, this might go crazy
+
                             $config['trigger_processes'][$runningTriggerProcess.Name]['target_process_overrides'].GetEnumerator() | Where-Object {
                                 # filter out 'removal' keys and process names we already have (because they were in target_processes)
                                 ($_.'Key' -notlike '-*') -and
@@ -2667,6 +2669,25 @@ public class DisplaySettings
                 {
                     Write-Verbose "Invoking post-restore custom commands..."
                     Invoke-CustomCmds -Commands $config['exec_post_restore']
+                }
+
+
+                if ($config['appaudioconfig_path'])
+                {
+                    if (-not (Test-Path -Path $config['appaudioconfig_path']))
+                    {
+                        Write-Error "AppAudioConfig.exe not found at $($config['appaudioconfig_path']).  Cannot restore volume of closed trigger processes to 100%"
+                    }
+                    else
+                    {
+                        # this foreach handles the case of having multiple trigger processes running (unlikely but possible)
+                        foreach ($runningTriggerProcess in $runningTriggerProcesses)
+                        {
+                            Write-Host "Setting saved volume for trigger process '$($runningTriggerProcess.Name)' to 100%"
+                            Write-Verbose "Running: $($config['appaudioconfig_path']) /SetVolume 100 '$($runningTriggerProcess.Name).exe'"
+                            & $config['appaudioconfig_path'] /SetVolume 100 "$($runningTriggerProcess.Name).exe"
+                        }
+                    }
                 }
 
 

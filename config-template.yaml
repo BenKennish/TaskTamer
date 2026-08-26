@@ -130,6 +130,11 @@ exec_post_restore:
 # see: https://github.com/res2k/HDRTray/
 hdrcmd_path: 'C:\Users\ben\AppData\Local\HDRTray-v0.5.5\HDRCmd.exe'
 
+# path to AppAudioConfig.exe (by NirSoft: https://www.nirsoft.net/utils/app_audio_config.html)
+# if specified, TaskTamer will use it to set the volume of a closed trigger process back to 100%
+# this is a workaround for a bug with Discord's Global Attenuation feature, which can leave a closed trigger process with a lowered volume
+appaudioconfig_path: 'C:\Users\ben\AppData\Local\AppAudioConfig\AppAudioConfig.exe'
+
 # number of seconds to wait when a trigger process is detected
 # before we start listening for it's closure
 #
