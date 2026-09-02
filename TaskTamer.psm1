@@ -572,7 +572,7 @@ function Invoke-TaskTamer
 
     }
 
-"@
+"@ -ErrorAction Stop
 
 
 
@@ -1723,147 +1723,191 @@ function Invoke-TaskTamer
 using System;
 using System.Runtime.InteropServices;
 
-[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
-public struct DEVMODE
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+public struct TASKTAMER_DEVMODE
 {
-    private const int CCHDEVICENAME = 0x20;
-    private const int CCHFORMNAME = 0x20;
+    private const int CCHDEVICENAME = 32;
+    private const int CCHFORMNAME = 32;
+
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
     public string dmDeviceName;
+
     public ushort dmSpecVersion;
     public ushort dmDriverVersion;
     public ushort dmSize;
     public ushort dmDriverExtra;
     public uint dmFields;
+
+    // Display version of DEVMODE's anonymous union
     public int dmPositionX;
     public int dmPositionY;
     public uint dmDisplayOrientation;
     public uint dmDisplayFixedOutput;
+
     public short dmColor;
     public short dmDuplex;
     public short dmYResolution;
     public short dmTTOption;
     public short dmCollate;
+
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHFORMNAME)]
     public string dmFormName;
+
     public ushort dmLogPixels;
     public uint dmBitsPerPel;
     public uint dmPelsWidth;
     public uint dmPelsHeight;
     public uint dmDisplayFlags;
     public uint dmDisplayFrequency;
-    public uint dmICMMethod;
-    public uint dmICMIntent;
-    public uint dmMediaType;
-    public uint dmDitherType;
-    public uint dmReserved1;
-    public uint dmReserved2;
-    public uint dmPanningWidth;
-    public uint dmPanningHeight;
 }
 
-public class DisplaySettings
+public static class DisplaySettings
 {
-    [DllImport("user32.dll")] public static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
-    [DllImport("user32.dll")] public static extern int ChangeDisplaySettings(ref DEVMODE devMode, int flags);
+    public const int ENUM_CURRENT_SETTINGS = -1;
+
+    [DllImport(
+        "user32.dll",
+        EntryPoint = "EnumDisplaySettingsExW",
+        CharSet = CharSet.Unicode,
+        ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnumDisplaySettingsEx(
+        [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
+        int modeNum,
+        [In, Out] ref TASKTAMER_DEVMODE devMode,
+        uint flags);
+
+    [DllImport(
+        "user32.dll",
+        EntryPoint = "ChangeDisplaySettingsExW",
+        CharSet = CharSet.Unicode,
+        ExactSpelling = true)]
+    public static extern int ChangeDisplaySettingsEx(
+        [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
+        ref TASKTAMER_DEVMODE devMode,
+        IntPtr windowHandle,
+        uint flags,
+        IntPtr parameters);
+
 }
-"@ -PassThru | Out-Null
+"@ -ErrorAction Stop
 
-    # Retrieves current display settings, with a fallback if EnumDisplaySettings fails.
-    # FIXME: Probably needs some work for multi-monitor setups
-    function Get-CurrentMode
+
+    function Get-DisplayMode
     {
+        Add-Type -AssemblyName System.Windows.Forms
 
-        <#
-        Get-CimInstance -ClassName Win32_VideoController |
-        Select-Object `
-            @{Name = 'Width';       Expression = { $_.CurrentHorizontalResolution }}, `
-            @{Name = 'Height';      Expression = { $_.CurrentVerticalResolution }}, `
-            @{Name = 'Pixels';      Expression = { $_.CurrentHorizontalResolution * $_.CurrentVerticalResolution }}, `
-            @{Name = 'RefreshRate'; Expression = { $_.CurrentRefreshRate }} |
-        Sort-Object -Property Pixels -Descending |
-        Select-Object -First 1
-        #>
+        $primaryScreen = [System.Windows.Forms.Screen]::PrimaryScreen
+        $deviceName = $primaryScreen.DeviceName
 
-        $devmode = New-Object DEVMODE
+        Write-Verbose "Querying display device '$deviceName'."
+
+        $devmode = New-Object TASKTAMER_DEVMODE
         $devmode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($devmode)
+        $devmode.dmDriverExtra = 0
 
-        <#
-        lpszDeviceName
-        Windows 95, 98: This must be a null string. Windows NT, 2000: If this is a null string, the current display device is used. Otherwise, this is the device name of the display device to examine. The string is of the form "\\.\DisplayX", where X is 1, 2, or 3.
+        $success = [DisplaySettings]::EnumDisplaySettingsEx(
+            $deviceName,
+            [DisplaySettings]::ENUM_CURRENT_SETTINGS,
+            [ref]$devmode,
+            0
+        )
 
-        iModeNum
-        The number of the graphics mode to retrieve information about. This could also be one of the following flags specifying a graphics mode:
-        ENUM_CURRENT_SETTINGS
-        Get information about the current display settings.
-        ENUM_REGISTRY_SETTINGS
-        Get information about the display settings stored in the registry.
-        lpDevMode
-        Receives information about the graphics mode. Only the dmBitsPerPixel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, and dmDisplayFrequency members have useful data in them. Before calling the function, this structure's dmSize member must be properly set.
-        #>
-        if ([DisplaySettings]::EnumDisplaySettings($null, -1, [ref]$devmode))
+        if (-not $success)
         {
-            return $devmode
+            throw "EnumDisplaySettingsEx failed for display device '$deviceName'."
         }
-        else
-        {
-            # FIXME: why is EnumDisplaySettings failing?
-            Write-Warning "EnumDisplaySettings failed; falling back to System.Windows.Forms.Screen"
-            Add-Type -AssemblyName System.Windows.Forms
-            $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $devmode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($devmode)
-            $devmode.dmPelsWidth = $screen.Width
-            $devmode.dmPelsHeight = $screen.Height
-            $devmode.dmDisplayFrequency = 60   # FIXME: this is a guess, as we don't have the frequency info from Screen
-            $devmode.dmFields = 0x580000  # DM_PELSWIDTH + DM_PELSHEIGHT + DM_DISPLAYFREQUENCY
-            return $devmode
+
+        Write-Verbose (
+            "Current mode on '$deviceName': {0}x{1}@{2}Hz" -f
+            $devmode.dmPelsWidth,
+            $devmode.dmPelsHeight,
+            $devmode.dmDisplayFrequency
+        )
+
+        return [PSCustomObject] @{
+            DeviceName         = $deviceName
+            #Mode               = $devmode
+            dmPelsWidth        = $devmode.dmPelsWidth
+            dmPelsHeight       = $devmode.dmPelsHeight
+            dmDisplayFrequency = $devmode.dmDisplayFrequency
         }
     }
 
+
     function Set-DisplayMode
     {
-        param(
-            [Parameter(Mandatory)] [int]$Width,
-            [Parameter(Mandatory)] [int]$Height,
-            [int]$Frequency = 60
-        )
-        try
-        {
-            $mode = New-Object DEVMODE
-            $mode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($mode)
-            $mode.dmPelsWidth = $Width
-            $mode.dmPelsHeight = $Height
-            $mode.dmDisplayFrequency = $Frequency
-            # DM_PELSWIDTH (0x00080000) + DM_PELSHEIGHT (0x00100000) + DM_DISPLAYFREQUENCY (0x00400000)
-            $mode.dmFields = 0x580000
+        param
+        (
+            [Parameter(Mandatory)]
+            [int] $Width,
 
-            $result = [DisplaySettings]::ChangeDisplaySettings([ref]$mode, 0)
-            switch ($result)
-            {
-                0
-                {
-                    # DISP_CHANGE_SUCCESSFUL
-                    Write-Verbose "Display mode set to ${Width}x${Height}@${Frequency}Hz successfully."
-                    return $true
-                }
-                1
-                {
-                    # DISP_CHANGE_RESTART
-                    Write-Warning "Mode change requires system restart to take effect."
-                    return $false
-                }
-                -1 { throw "Failed: The display driver failed the specified graphics mode." }
-                -2 { throw "Failed: The graphics mode is incompatible." }
-                -3 { throw "Failed: The display driver failed the specified graphics mode." }
-                -4 { throw "Failed: The display mode is invalid." }
-                default { throw "Unknown ChangeDisplaySettings return code: $result" }
-            }
-        }
-        catch
+            [Parameter(Mandatory)]
+            [int] $Height,
+
+            [Parameter(Mandatory)]
+            [int] $Frequency
+        )
+
+        $CDS_FULLSCREEN = 0x00000004
+        $CDS_TEST = 0x00000002
+
+        $mode = New-Object TASKTAMER_DEVMODE
+        $mode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf([type][TASKTAMER_DEVMODE])
+
+        $deviceName = [System.Windows.Forms.Screen]::PrimaryScreen.DeviceName
+
+        if (-not [DisplaySettings]::EnumDisplaySettingsEx(
+
+                $deviceName,
+                [DisplaySettings]::ENUM_CURRENT_SETTINGS,
+                [ref]$mode,
+                0))
         {
-            Write-Error "Error setting display mode: $_"
-            return $false
+            throw 'Could not retrieve the current display mode.'
         }
+
+        $mode.dmPelsWidth = $Width
+        $mode.dmPelsHeight = $Height
+        $mode.dmDisplayFrequency = $Frequency
+
+        # Retain the other fields from the current driver-provided TASKTAMER_DEVMODE.
+        $mode.dmFields = $mode.dmFields -bor 0x00080000 -bor 0x00100000 -bor 0x00400000
+
+        $testResult = [DisplaySettings]::ChangeDisplaySettingsEx(
+            $deviceName,
+            [ref]$mode,
+            [IntPtr]::Zero,
+            $CDS_TEST,
+            [IntPtr]::Zero
+        )
+
+        if ($testResult -ne 0)
+        {
+            throw "Display mode ${Width}x${Height}@${Frequency}Hz is not accepted; result: $testResult"
+        }
+
+        $result = [DisplaySettings]::ChangeDisplaySettingsEx(
+            $deviceName,
+            [ref]$mode,
+            [IntPtr]::Zero,
+            0,
+            # (0: Applies the mode dynamically without saving it to the registry)
+            # ($CDS_FULLSCREEN: Marks the mode as temporary/fullscreen-oriented. Historically intended for fullscreen games.)
+            #  explorer will resize windows appropriately?
+            #  in CDS_FULLSCREEN mode, out of bounds windows don't move/resize to fit the new resolution but when the resolution is restored, they look as before
+            #    any new windows using Snap Layout will function accoring to the new res but when the old res is restored, they will be incorrect
+            # CDS_UPDATEREGISTRY: persist the resolution in the registry
+            [IntPtr]::Zero
+        )
+
+        if ($result -ne 0)
+        {
+            throw "Changing display mode failed; result: $result"
+        }
+
+        Write-Verbose "Display mode changed to ${Width}x${Height}@${Frequency}Hz."
+        return $true
     }
 
 
@@ -2396,7 +2440,7 @@ public class DisplaySettings
                         }
 
                         # Save current resolution to restore when trigger process exits
-                        $previousResolution = Get-CurrentMode
+                        $previousResolution = Get-DisplayMode
 
                         Write-Host "**** Changing resolution: $($res.width)x$($res.height) ($($res.frequency)Hz) for trigger process '$($runningTriggerProcess.Name)'" -ForegroundColor Cyan
 
