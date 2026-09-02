@@ -1846,7 +1846,9 @@ public static class DisplaySettings
             [int] $Height,
 
             [Parameter(Mandatory)]
-            [int] $Frequency
+            [int] $Frequency,
+
+            [switch] $StickyMode
         )
 
         $CDS_FULLSCREEN = 0x00000004
@@ -1887,17 +1889,21 @@ public static class DisplaySettings
             throw "Display mode ${Width}x${Height}@${Frequency}Hz is not accepted; result: $testResult"
         }
 
+        $setType = 0
+        if ($StickyMode)
+        {
+            $setType = $CDS_FULLSCREEN
+        }
+        # (0: Windows will treat it like a proper resolution change - windows will resize and reposition to fit the new resolution)
+        # ($CDS_FULLSCREEN: temporary fullscreen. Historically intended for fullscreen games.  out of bounds windows don't move/resize to fit the new resolution but when the old
+        # resolution is restored, they will look as before.  any new windows using Snap Layout will look fine in the new res but when the old res is restored, they will be incorrect
+        # you can use CDS_UPDATEREGISTRY to persist the resolution in the registry
+
         $result = [DisplaySettings]::ChangeDisplaySettingsEx(
             $deviceName,
             [ref]$mode,
             [IntPtr]::Zero,
-            0,
-            # (0: Applies the mode dynamically without saving it to the registry)
-            # ($CDS_FULLSCREEN: Marks the mode as temporary/fullscreen-oriented. Historically intended for fullscreen games.)
-            #  explorer will resize windows appropriately?
-            #  in CDS_FULLSCREEN mode, out of bounds windows don't move/resize to fit the new resolution but when the resolution is restored, they look as before
-            #    any new windows using Snap Layout will function accoring to the new res but when the old res is restored, they will be incorrect
-            # CDS_UPDATEREGISTRY: persist the resolution in the registry
+            [int]$setType,
             [IntPtr]::Zero
         )
 
@@ -2439,13 +2445,19 @@ public static class DisplaySettings
                             throw "Invalid resolution specified in config for trigger process '$($runningTriggerProcess.Name)': $($res | ConvertTo-Yaml)"
                         }
 
+                        $stickyMode = $false
+                        if ($config['trigger_processes'][$runningTriggerProcess.Name]['resolution'].ContainsKey('sticky_mode') -and $config['trigger_processes'][$runningTriggerProcess.Name]['resolution']['sticky_mode'])
+                        {
+                            $stickyMode = $true
+                        }
+
                         # Save current resolution to restore when trigger process exits
                         $previousResolution = Get-DisplayMode
 
                         Write-Host "**** Changing resolution: $($res.width)x$($res.height) ($($res.frequency)Hz) for trigger process '$($runningTriggerProcess.Name)'" -ForegroundColor Cyan
 
                         # Switch resolution
-                        if (-not (Set-DisplayMode -Width $res.width -Height $res.height -Frequency $res.frequency))
+                        if (-not (Set-DisplayMode -Width $res.width -Height $res.height -Frequency $res.frequency -StickyMode:$stickyMode))
                         {
                             Write-Warning "Set-DisplayMode failed, continuing with the current resolution"
                         }

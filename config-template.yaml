@@ -100,6 +100,7 @@ trigger_processes:
             width: 1920
             height: 1080
             frequency: 60
+            sticky_mode: true   #  move/resize existing desktop windows
     "Solitaire":
 
 
