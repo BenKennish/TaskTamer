@@ -401,178 +401,181 @@ function Invoke-TaskTamer
 
     # Add necessary .NET assemblies for API calls
     # using Add-Type cmdlet (C# code)
-    Add-Type @"
+    Add-Type -TypeDefinition @"
     using System;
     using System.Runtime.InteropServices;
 
-    public class ProcessManager
+    namespace TaskTamer
     {
-        // suspend/resume functionality...
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr OpenThread(int dwDesiredAccess, bool bInheritHandle, uint dwThreadId);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern uint SuspendThread(IntPtr hThread);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern int ResumeThread(IntPtr hThread);
-
-        [DllImport("kernel32.dll")]
-        private static extern bool CloseHandle(IntPtr hObject);
-
-        private const int THREAD_SUSPEND_RESUME = 0x0002;
-
-
-        public static void SuspendProcess(int pid)
+        public class ProcessManager
         {
-            var process = System.Diagnostics.Process.GetProcessById(pid);
+            // suspend/resume functionality...
 
-            foreach (System.Diagnostics.ProcessThread thread in process.Threads)
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern IntPtr OpenThread(int dwDesiredAccess, bool bInheritHandle, uint dwThreadId);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern uint SuspendThread(IntPtr hThread);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern int ResumeThread(IntPtr hThread);
+
+            [DllImport("kernel32.dll")]
+            private static extern bool CloseHandle(IntPtr hObject);
+
+            private const int THREAD_SUSPEND_RESUME = 0x0002;
+
+
+            public static void SuspendProcess(int pid)
             {
-                IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
+                var process = System.Diagnostics.Process.GetProcessById(pid);
 
-                if (pOpenThread != IntPtr.Zero)
+                foreach (System.Diagnostics.ProcessThread thread in process.Threads)
                 {
-                    if (SuspendThread(pOpenThread) == unchecked((uint)-1))
+                    IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
+
+                    if (pOpenThread != IntPtr.Zero)
                     {
+                        if (SuspendThread(pOpenThread) == unchecked((uint)-1))
+                        {
+                            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                        }
+                        CloseHandle(pOpenThread);
+                    }
+                    else
+                    {
+                        // If OpenThread failed, throw an exception
                         Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
                     }
-                    CloseHandle(pOpenThread);
-                }
-                else
-                {
-                    // If OpenThread failed, throw an exception
-                    Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
                 }
             }
-        }
 
 
-        public static void ResumeProcess(int pid)
-        {
-            var process = System.Diagnostics.Process.GetProcessById(pid);
-
-            foreach (System.Diagnostics.ProcessThread thread in process.Threads)
+            public static void ResumeProcess(int pid)
             {
-                IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
+                var process = System.Diagnostics.Process.GetProcessById(pid);
 
-                if (pOpenThread != IntPtr.Zero)
+                foreach (System.Diagnostics.ProcessThread thread in process.Threads)
                 {
-                    if (ResumeThread(pOpenThread) == -1)
+                    IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
+
+                    if (pOpenThread != IntPtr.Zero)
                     {
+                        if (ResumeThread(pOpenThread) == -1)
+                        {
+                            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                        }
+                        CloseHandle(pOpenThread);
+                    }
+                    else
+                    {
+                        // If OpenThread failed, throw an exception
                         Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
                     }
-                    CloseHandle(pOpenThread);
-                }
-                else
-                {
-                    // If OpenThread failed, throw an exception
-                    Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
                 }
             }
-        }
 
 
-        // minimize windows functionality...
+            // minimize windows functionality...
 
-        // Define constants for use with ShowWindow()
-        private const int SW_MINIMIZE = 6;
-        private const int SW_RESTORE = 9;
-
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool IsWindowVisible(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern bool IsIconic(IntPtr hWnd);
-        // Checks if window is minimized (iconified)
-
-        [DllImport("user32.dll")]
-        public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
-
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-        // Delegate for enumerating windows
-        public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr GetParent(IntPtr hWnd);
+            // Define constants for use with ShowWindow()
+            private const int SW_MINIMIZE = 6;
+            private const int SW_RESTORE = 9;
 
 
-        // minimize all the user-facing windows of a specific process
-        // would be more efficient to provide it an array of PIDs and run only once
-        public static int MinimizeProcessWindows(int pid)
-        {
-            int numWindowsMinimized = 0;
+            [DllImport("user32.dll")]
+            private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
-            EnumWindows((hWnd, lParam) =>
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool IsWindowVisible(IntPtr hWnd);
+
+            [DllImport("user32.dll")]
+            private static extern bool IsIconic(IntPtr hWnd);
+            // Checks if window is minimized (iconified)
+
+            [DllImport("user32.dll")]
+            public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+            // Delegate for enumerating windows
+            public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+            [DllImport("user32.dll")]
+            public static extern IntPtr GetParent(IntPtr hWnd);
+
+
+            // minimize all the user-facing windows of a specific process
+            // would be more efficient to provide it an array of PIDs and run only once
+            public static int MinimizeProcessWindows(int pid)
             {
-                int processId;
-                GetWindowThreadProcessId(hWnd, out processId);
+                int numWindowsMinimized = 0;
 
-                // if the window belongs to the process we are interested in
-                if (processId == pid)
+                EnumWindows((hWnd, lParam) =>
                 {
-                    // minimize top-level windows that are visible and not already minimized
-                    if (IsTopLevelWindow(hWnd) && IsWindowVisible(hWnd) && !IsIconic(hWnd))
+                    int processId;
+                    GetWindowThreadProcessId(hWnd, out processId);
+
+                    // if the window belongs to the process we are interested in
+                    if (processId == pid)
                     {
-                        if (ShowWindow(hWnd, SW_MINIMIZE))
+                        // minimize top-level windows that are visible and not already minimized
+                        if (IsTopLevelWindow(hWnd) && IsWindowVisible(hWnd) && !IsIconic(hWnd))
                         {
-                            numWindowsMinimized++;
-                        }
-                        else
-                        {
-                            Console.WriteLine("Process "+pid+" Window "+hWnd+" failed to minimise");
+                            if (ShowWindow(hWnd, SW_MINIMIZE))
+                            {
+                                numWindowsMinimized++;
+                            }
+                            else
+                            {
+                                Console.WriteLine("Process "+pid+" Window "+hWnd+" failed to minimise");
+                            }
                         }
                     }
-                }
-                return true;
-            }, IntPtr.Zero);
+                    return true;
+                }, IntPtr.Zero);
 
-            return numWindowsMinimized;
-        }
-
-
-        // Helper function to check if the window is a top-level window
-        private static bool IsTopLevelWindow(IntPtr hWnd)
-        {
-            IntPtr hParent = GetParent(hWnd);
-            return hParent == IntPtr.Zero; // If the parent is null, it's a top-level window
-        }
-
-
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
-
-        // force OS to decrease a process' working set
-        public static void TrimWorkingSet(int pid)
-        {
-            var process = System.Diagnostics.Process.GetProcessById(pid);
-
-            // When both dwMinimumWorkingSetSize and dwMaximumWorkingSetSize are set to -1, Windows will
-            // automatically trim the process’s working set to the bare minimum required to keep it
-            // running. This operation is often referred to as trimming the working set.
-
-            bool res = SetProcessWorkingSetSize(process.Handle, (IntPtr)(-1), (IntPtr)(-1));
-
-            if (!res)
-            {
-                int errorCode = Marshal.GetLastWin32Error();
-                throw new System.ComponentModel.Win32Exception(errorCode, "Failed to trim the working set for PID "+pid);
+                return numWindowsMinimized;
             }
-        }
 
+
+            // Helper function to check if the window is a top-level window
+            private static bool IsTopLevelWindow(IntPtr hWnd)
+            {
+                IntPtr hParent = GetParent(hWnd);
+                return hParent == IntPtr.Zero; // If the parent is null, it's a top-level window
+            }
+
+
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
+
+            // force OS to decrease a process' working set
+            public static void TrimWorkingSet(int pid)
+            {
+                var process = System.Diagnostics.Process.GetProcessById(pid);
+
+                // When both dwMinimumWorkingSetSize and dwMaximumWorkingSetSize are set to -1, Windows will
+                // automatically trim the process’s working set to the bare minimum required to keep it
+                // running. This operation is often referred to as trimming the working set.
+
+                bool res = SetProcessWorkingSetSize(process.Handle, (IntPtr)(-1), (IntPtr)(-1));
+
+                if (!res)
+                {
+                    int errorCode = Marshal.GetLastWin32Error();
+                    throw new System.ComponentModel.Win32Exception(errorCode, "Failed to trim the working set for PID "+pid);
+                }
+            }
+
+        }
     }
 
-"@ -ErrorAction Stop
+"@
 
 
 
@@ -1195,7 +1198,7 @@ function Invoke-TaskTamer
                             {
                                 try
                                 {
-                                    [ProcessManager]::SuspendProcess($proc.Id)
+                                    [TaskTamer.ProcessManager]::SuspendProcess($proc.Id)
                                 }
                                 catch
                                 {
@@ -1206,7 +1209,7 @@ function Invoke-TaskTamer
                             {
                                 try
                                 {
-                                    [ProcessManager]::ResumeProcess($proc.Id)
+                                    [TaskTamer.ProcessManager]::ResumeProcess($proc.Id)
                                 }
                                 catch
                                 {
@@ -1274,7 +1277,7 @@ function Invoke-TaskTamer
                     {
                         if ($targetProcessesConfig[$proc.Name]['action'] -ne 'close')
                         {
-                            [ProcessManager]::TrimWorkingSet($proc.Id)
+                            [TaskTamer.ProcessManager]::TrimWorkingSet($proc.Id)
                             Start-Sleep -Milliseconds 200
                             $proc.Refresh()
                             Write-Host "$($proc.Name) ($($proc.Id)) RAM trimmed to $(ConvertTo-HumanReadable -Bytes $proc.WorkingSet64)" -ForegroundColor Magenta
@@ -1719,78 +1722,82 @@ function Invoke-TaskTamer
     }
 
 
-    Add-Type @"
+    Add-Type -ErrorAction Stop -TypeDefinition @"
+
 using System;
 using System.Runtime.InteropServices;
 
-[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-public struct TASKTAMER_DEVMODE
+namespace TaskTamer
 {
-    private const int CCHDEVICENAME = 32;
-    private const int CCHFORMNAME = 32;
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct TASKTAMER_DEVMODE
+    {
+        private const int CCHDEVICENAME = 32;
+        private const int CCHFORMNAME = 32;
 
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
-    public string dmDeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
+        public string dmDeviceName;
 
-    public ushort dmSpecVersion;
-    public ushort dmDriverVersion;
-    public ushort dmSize;
-    public ushort dmDriverExtra;
-    public uint dmFields;
+        public ushort dmSpecVersion;
+        public ushort dmDriverVersion;
+        public ushort dmSize;
+        public ushort dmDriverExtra;
+        public uint dmFields;
 
-    // Display version of DEVMODE's anonymous union
-    public int dmPositionX;
-    public int dmPositionY;
-    public uint dmDisplayOrientation;
-    public uint dmDisplayFixedOutput;
+        // Display version of DEVMODE's anonymous union
+        public int dmPositionX;
+        public int dmPositionY;
+        public uint dmDisplayOrientation;
+        public uint dmDisplayFixedOutput;
 
-    public short dmColor;
-    public short dmDuplex;
-    public short dmYResolution;
-    public short dmTTOption;
-    public short dmCollate;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
 
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHFORMNAME)]
-    public string dmFormName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHFORMNAME)]
+        public string dmFormName;
 
-    public ushort dmLogPixels;
-    public uint dmBitsPerPel;
-    public uint dmPelsWidth;
-    public uint dmPelsHeight;
-    public uint dmDisplayFlags;
-    public uint dmDisplayFrequency;
+        public ushort dmLogPixels;
+        public uint dmBitsPerPel;
+        public uint dmPelsWidth;
+        public uint dmPelsHeight;
+        public uint dmDisplayFlags;
+        public uint dmDisplayFrequency;
+    }
+
+    public static class DisplaySettings
+    {
+        public const int ENUM_CURRENT_SETTINGS = -1;
+
+        [DllImport(
+            "user32.dll",
+            EntryPoint = "EnumDisplaySettingsExW",
+            CharSet = CharSet.Unicode,
+            ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool EnumDisplaySettingsEx(
+            [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
+            int modeNum,
+            [In, Out] ref TASKTAMER_DEVMODE devMode,
+            uint flags);
+
+        [DllImport(
+            "user32.dll",
+            EntryPoint = "ChangeDisplaySettingsExW",
+            CharSet = CharSet.Unicode,
+            ExactSpelling = true)]
+        public static extern int ChangeDisplaySettingsEx(
+            [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
+            ref TASKTAMER_DEVMODE devMode,
+            IntPtr windowHandle,
+            uint flags,
+            IntPtr parameters);
+
+    }
 }
-
-public static class DisplaySettings
-{
-    public const int ENUM_CURRENT_SETTINGS = -1;
-
-    [DllImport(
-        "user32.dll",
-        EntryPoint = "EnumDisplaySettingsExW",
-        CharSet = CharSet.Unicode,
-        ExactSpelling = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool EnumDisplaySettingsEx(
-        [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
-        int modeNum,
-        [In, Out] ref TASKTAMER_DEVMODE devMode,
-        uint flags);
-
-    [DllImport(
-        "user32.dll",
-        EntryPoint = "ChangeDisplaySettingsExW",
-        CharSet = CharSet.Unicode,
-        ExactSpelling = true)]
-    public static extern int ChangeDisplaySettingsEx(
-        [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
-        ref TASKTAMER_DEVMODE devMode,
-        IntPtr windowHandle,
-        uint flags,
-        IntPtr parameters);
-
-}
-"@ -ErrorAction Stop
+"@
 
 
     function Get-DisplayMode
@@ -1806,9 +1813,9 @@ public static class DisplaySettings
         $devmode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($devmode)
         $devmode.dmDriverExtra = 0
 
-        $success = [DisplaySettings]::EnumDisplaySettingsEx(
+        $success = [TaskTamer.DisplaySettings]::EnumDisplaySettingsEx(
             $deviceName,
-            [DisplaySettings]::ENUM_CURRENT_SETTINGS,
+            [TaskTamer.DisplaySettings]::ENUM_CURRENT_SETTINGS,
             [ref]$devmode,
             0
         )
@@ -1859,10 +1866,10 @@ public static class DisplaySettings
 
         $deviceName = [System.Windows.Forms.Screen]::PrimaryScreen.DeviceName
 
-        if (-not [DisplaySettings]::EnumDisplaySettingsEx(
+        if (-not [TaskTamer.DisplaySettings]::EnumDisplaySettingsEx(
 
                 $deviceName,
-                [DisplaySettings]::ENUM_CURRENT_SETTINGS,
+                [TaskTamer.DisplaySettings]::ENUM_CURRENT_SETTINGS,
                 [ref]$mode,
                 0))
         {
@@ -1876,7 +1883,7 @@ public static class DisplaySettings
         # Retain the other fields from the current driver-provided TASKTAMER_DEVMODE.
         $mode.dmFields = $mode.dmFields -bor 0x00080000 -bor 0x00100000 -bor 0x00400000
 
-        $testResult = [DisplaySettings]::ChangeDisplaySettingsEx(
+        $testResult = [TaskTamer.DisplaySettings]::ChangeDisplaySettingsEx(
             $deviceName,
             [ref]$mode,
             [IntPtr]::Zero,
@@ -1899,7 +1906,7 @@ public static class DisplaySettings
         # resolution is restored, they will look as before.  any new windows using Snap Layout will look fine in the new res but when the old res is restored, they will be incorrect
         # you can use CDS_UPDATEREGISTRY to persist the resolution in the registry
 
-        $result = [DisplaySettings]::ChangeDisplaySettingsEx(
+        $result = [TaskTamer.DisplaySettings]::ChangeDisplaySettingsEx(
             $deviceName,
             [ref]$mode,
             [IntPtr]::Zero,
@@ -2053,6 +2060,7 @@ public static class DisplaySettings
 
 
     # suspend all processes with a given name, starting with the oldest generation and ending with the leaves
+    # CURRENTLY UNUSED
     function Suspend-ProcessGroup
     {
         param (
@@ -2525,7 +2533,7 @@ public static class DisplaySettings
                         {
                             try
                             {
-                                $numWindowsMinimised = [ProcessManager]::MinimizeProcessWindows($proc.Id)
+                                $numWindowsMinimised = [TaskTamer.ProcessManager]::MinimizeProcessWindows($proc.Id)
                                 if ($numWindowsMinimised)
                                 {
                                     Write-Host "Minimized: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]" -ForegroundColor Cyan
