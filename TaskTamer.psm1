@@ -1730,7 +1730,7 @@ using System.Runtime.InteropServices;
 namespace TaskTamer
 {
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct TASKTAMER_DEVMODE
+    public struct DEVMODE
     {
         private const int CCHDEVICENAME = 32;
         private const int CCHFORMNAME = 32;
@@ -1780,7 +1780,7 @@ namespace TaskTamer
         public static extern bool EnumDisplaySettingsEx(
             [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
             int modeNum,
-            [In, Out] ref TASKTAMER_DEVMODE devMode,
+            [In, Out] ref DEVMODE devMode,
             uint flags);
 
         [DllImport(
@@ -1790,7 +1790,7 @@ namespace TaskTamer
             ExactSpelling = true)]
         public static extern int ChangeDisplaySettingsEx(
             [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
-            ref TASKTAMER_DEVMODE devMode,
+            ref DEVMODE devMode,
             IntPtr windowHandle,
             uint flags,
             IntPtr parameters);
@@ -1804,12 +1804,11 @@ namespace TaskTamer
     {
         Add-Type -AssemblyName System.Windows.Forms
 
-        $primaryScreen = [System.Windows.Forms.Screen]::PrimaryScreen
-        $deviceName = $primaryScreen.DeviceName
+        $deviceName = [System.Windows.Forms.Screen]::PrimaryScreen.DeviceName
 
         Write-Verbose "Querying display device '$deviceName'."
 
-        $devmode = New-Object TASKTAMER_DEVMODE
+        $devmode = [TaskTamer.DEVMODE]::new()
         $devmode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($devmode)
         $devmode.dmDriverExtra = 0
 
@@ -1855,14 +1854,14 @@ namespace TaskTamer
             [Parameter(Mandatory)]
             [int] $Frequency,
 
-            [switch] $StickyMode
+            [switch] $Temporary
         )
 
         $CDS_FULLSCREEN = 0x00000004
         $CDS_TEST = 0x00000002
 
-        $mode = New-Object TASKTAMER_DEVMODE
-        $mode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf([type][TASKTAMER_DEVMODE])
+        $mode = [TaskTamer.DEVMODE]::new()
+        $mode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf([type][TaskTamer.DEVMODE])
 
         $deviceName = [System.Windows.Forms.Screen]::PrimaryScreen.DeviceName
 
@@ -1880,9 +1879,11 @@ namespace TaskTamer
         $mode.dmPelsHeight = $Height
         $mode.dmDisplayFrequency = $Frequency
 
-        # Retain the other fields from the current driver-provided TASKTAMER_DEVMODE.
+        # Retain the other fields from the current driver-provided DEVMODE.
+        # FIXME: magic numbers
         $mode.dmFields = $mode.dmFields -bor 0x00080000 -bor 0x00100000 -bor 0x00400000
 
+        # test to determine if the graphics mode is actually valid, without causing the system to change to it.
         $testResult = [TaskTamer.DisplaySettings]::ChangeDisplaySettingsEx(
             $deviceName,
             [ref]$mode,
@@ -1890,14 +1891,14 @@ namespace TaskTamer
             $CDS_TEST,
             [IntPtr]::Zero
         )
-
         if ($testResult -ne 0)
         {
             throw "Display mode ${Width}x${Height}@${Frequency}Hz is not accepted; result: $testResult"
         }
 
+
         $setType = 0
-        if ($StickyMode)
+        if ($Temporary)
         {
             $setType = $CDS_FULLSCREEN
         }
@@ -2453,10 +2454,10 @@ namespace TaskTamer
                             throw "Invalid resolution specified in config for trigger process '$($runningTriggerProcess.Name)': $($res | ConvertTo-Yaml)"
                         }
 
-                        $stickyMode = $false
-                        if ($config['trigger_processes'][$runningTriggerProcess.Name]['resolution'].ContainsKey('sticky_mode') -and $config['trigger_processes'][$runningTriggerProcess.Name]['resolution']['sticky_mode'])
+                        $temporary = $false
+                        if ($config['trigger_processes'][$runningTriggerProcess.Name]['resolution'].ContainsKey('temporary') -and $config['trigger_processes'][$runningTriggerProcess.Name]['resolution']['temporary'])
                         {
-                            $stickyMode = $true
+                            $temporary = $true
                         }
 
                         # Save current resolution to restore when trigger process exits
@@ -2465,7 +2466,7 @@ namespace TaskTamer
                         Write-Host "**** Changing resolution: $($res.width)x$($res.height) ($($res.frequency)Hz) for trigger process '$($runningTriggerProcess.Name)'" -ForegroundColor Cyan
 
                         # Switch resolution
-                        if (-not (Set-DisplayMode -Width $res.width -Height $res.height -Frequency $res.frequency -StickyMode:$stickyMode))
+                        if (-not (Set-DisplayMode -Width $res.width -Height $res.height -Frequency $res.frequency -Temporary:$temporary))
                         {
                             Write-Warning "Set-DisplayMode failed, continuing with the current resolution"
                         }

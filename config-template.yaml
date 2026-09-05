@@ -75,6 +75,7 @@ trigger_processes:
             width: 1920
             height: 1080
             frequency: 60
+            temporary: true   #  don't move/resize existing desktop windows, use when desktop interactions unlikely while trigger process is running
 
     "RocketLeague":
         target_process_overrides:
@@ -100,7 +101,7 @@ trigger_processes:
             width: 1920
             height: 1080
             frequency: 60
-            sticky_mode: true   #  move/resize existing desktop windows, use when desktop interactions likely while trigger process is running (e.g. GW2 wiki)
+
     "Solitaire":
 
 
