@@ -1729,6 +1729,23 @@ using System.Runtime.InteropServices;
 
 namespace TaskTamer
 {
+    [Flags]
+    public enum DisplayFields : uint
+    {
+        PelsWidth = 0x00080000,
+        PelsHeight = 0x00100000,
+        DisplayFrequency = 0x00400000,
+        CurrentMode = PelsWidth | PelsHeight | DisplayFrequency
+    }
+
+    [Flags]
+    public enum ChangeDisplaySettingsFlags : uint
+    {
+        None = 0x00000000,
+        Test = 0x00000002,
+        Fullscreen = 0x00000004
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct DEVMODE
     {
@@ -1857,9 +1874,6 @@ namespace TaskTamer
             [switch] $Temporary
         )
 
-        $CDS_FULLSCREEN = 0x00000004
-        $CDS_TEST = 0x00000002
-
         $mode = [TaskTamer.DEVMODE]::new()
         $mode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf([type][TaskTamer.DEVMODE])
 
@@ -1879,28 +1893,37 @@ namespace TaskTamer
         $mode.dmPelsHeight = $Height
         $mode.dmDisplayFrequency = $Frequency
 
-        # Retain the other fields from the current driver-provided DEVMODE.
-        # FIXME: magic numbers
-        $mode.dmFields = $mode.dmFields -bor 0x00080000 -bor 0x00100000 -bor 0x00400000
+        $mode.dmFields = [TaskTamer.DisplayFields]::CurrentMode
 
         # test to determine if the graphics mode is actually valid, without causing the system to change to it.
         $testResult = [TaskTamer.DisplaySettings]::ChangeDisplaySettingsEx(
             $deviceName,
             [ref]$mode,
             [IntPtr]::Zero,
-            $CDS_TEST,
+            [TaskTamer.ChangeDisplaySettingsFlags]::Test,
             [IntPtr]::Zero
         )
+
         if ($testResult -ne 0)
         {
+
+            <#
+                0     DISP_CHANGE_SUCCESSFUL
+                1     DISP_CHANGE_RESTART  (Mode change requires system restart to take effect)
+                -1    Failed: The display driver failed the specified graphics mode
+                -2    Failed: The graphics mode is incompatible
+                -3    Failed: The display driver failed the specified graphics mode.
+                -4    Failed: The display mode is invalid.
+            #>
+
             throw "Display mode ${Width}x${Height}@${Frequency}Hz is not accepted; result: $testResult"
         }
 
 
-        $setType = 0
+        $setType = [TaskTamer.ChangeDisplaySettingsFlags]::None
         if ($Temporary)
         {
-            $setType = $CDS_FULLSCREEN
+            $setType = [TaskTamer.ChangeDisplaySettingsFlags]::Fullscreen
         }
         # (0: Windows will treat it like a proper resolution change - windows will resize and reposition to fit the new resolution)
         # ($CDS_FULLSCREEN: temporary fullscreen. Historically intended for fullscreen games.  out of bounds windows don't move/resize to fit the new resolution but when the old
