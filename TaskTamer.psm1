@@ -2061,7 +2061,7 @@ namespace TaskTamer
 
 
     # suspend all processes with a given name, starting with the oldest generation and ending with the leaves
-    # CURRENTLY UNUSED
+    # ***************************** CURRENTLY UNUSED
     function Suspend-ProcessGroup
     {
         param (
@@ -2463,7 +2463,14 @@ namespace TaskTamer
                         # Save current resolution to restore when trigger process exits
                         $previousResolution = Get-DisplayMode
 
-                        Write-Host "**** Changing resolution: $($res.width)x$($res.height) ($($res.frequency)Hz) for trigger process '$($runningTriggerProcess.Name)'" -ForegroundColor Cyan
+
+                        $modeText = "normal"
+                        if ($temporary)
+                        {
+                            $modeText = "temporary"
+                        }
+
+                        Write-Host ("**** Changing resolution: $($res.width)x$($res.height) ($($res.frequency)Hz) [$($modeText)] for trigger process '$($runningTriggerProcess.Name)'") -ForegroundColor Cyan
 
                         # Switch resolution
                         if (-not (Set-DisplayMode -Width $res.width -Height $res.height -Frequency $res.frequency -Temporary:$temporary))
