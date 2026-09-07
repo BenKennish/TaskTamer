@@ -2459,6 +2459,39 @@ namespace TaskTamer
                         Write-Verbose "No target process overrides for '$($runningTriggerProcess.Name)'"
                     }
 
+                    # Minimise windows of all target processes
+                    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Minimising target process windows" -ForegroundColor Cyan
+
+                    foreach ($proc in Get-Process | Where-Object {
+                            $targetProcessesConfig.ContainsKey($_.Name) `
+                                -and $targetProcessesConfig[$_.Name].ContainsKey('minimize') `
+                                -and $targetProcessesConfig[$_.Name]['minimize'] } )
+                    {
+                        try
+                        {
+                            $numWindowsMinimised = 0;
+                            if (!$WhatIf)
+                            {
+                                try
+                                {
+                                    $numWindowsMinimised = [TaskTamer.ProcessManager]::MinimizeProcessWindows($proc.Id)
+                                    if ($numWindowsMinimised)
+                                    {
+                                        Write-Host "Minimised: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]" -ForegroundColor Cyan
+                                    }
+                                }
+                                catch
+                                {
+                                    Write-Verbose "Error minimising windows for PID $($proc.ID): $_"
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            Write-Error "!!!! Failed to minimise: $($proc.Name) ($($proc.Id)). Error: $_";
+                        }
+                    }
+
 
                     # switch display resolution if specified in the trigger process config
                     #
@@ -2552,35 +2585,7 @@ namespace TaskTamer
                     # ProcessPriorityClass]::Idle is what Task Manager calls "Low"
                 }
 
-                # Minimise windows of all target processes
-                Write-Host "**** Minimizing target process windows..."
 
-                foreach ($proc in Get-Process | Where-Object { $targetProcessesConfig.ContainsKey($_.Name) } )
-                {
-                    try
-                    {
-                        $numWindowsMinimised = 0;
-                        if (!$WhatIf)
-                        {
-                            try
-                            {
-                                $numWindowsMinimised = [TaskTamer.ProcessManager]::MinimizeProcessWindows($proc.Id)
-                                if ($numWindowsMinimised)
-                                {
-                                    Write-Host "Minimized: $($proc.Name) ($($proc.Id)) [$($numWindowsMinimised) windows]" -ForegroundColor Cyan
-                                }
-                            }
-                            catch
-                            {
-                                Write-Verbose "Error minimizing windows for PID $($proc.ID): $_"
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        Write-Error "!!!! Failed to minimize: $($proc.Name) ($($proc.Id)). Error: $_";
-                    }
-                }
 
                 if ($config['exec_pre_throttle'])
                 {
