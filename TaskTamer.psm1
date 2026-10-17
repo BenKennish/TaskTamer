@@ -156,6 +156,8 @@ function Invoke-TaskTamer
         [switch]$WhatIf
     )
 
+    # setup code that runs before any functinos are defined
+
     Set-Variable -Name COLUMN_HEADINGS -Option Constant -Value @("NAME", "PID", "RAM", "ACTION", "DETAILS")
     Set-Variable -Name COLUMN_FORMATS  -Option Constant -Value @("{0,-17}", "{0,-6}", "{0,11}", "{0,-13}", "{0,-20}")
 
@@ -199,6 +201,14 @@ function Invoke-TaskTamer
     $previousEnv['WindowTitle'] = $host.UI.RawUI.WindowTitle
 
 
+    # ====================================================
+    # ====================================================
+    # ====================================================
+    # ====================================================
+
+
+    # now for the functions
+    #
     function Start-Unlock
     {
         param
@@ -330,252 +340,6 @@ function Invoke-TaskTamer
         }
     }
 
-
-    # -------------------------------------------------------------------------
-    # -------------------------------------------------------------------------
-    # -------------------------------------------------------------------------
-    # -------------------------------------------------------------------------
-    # -------------------------------------------------------------------------
-
-
-
-    # retrive the path of the folder where the script/module is located
-    if (-not ([System.AppDomain]::CurrentDomain.FriendlyName -like "*.exe"))
-    {
-        Write-Verbose "Running interpreted"
-
-        if ($null -ne $MyInvocation.MyCommand.Module)
-        {
-            # running as module (.psm1)
-            $fullScriptPath = $MyInvocation.MyCommand.Module.Path
-        }
-        else
-        {
-            # running as script (.ps1)
-            $fullScriptPath = $MyInvocation.MyCommand.Path
-        }
-
-        $scriptFolder = Split-Path -Parent $fullScriptPath
-    }
-    else
-    {
-        Write-Verbose "Running compiled"
-        # if we try to use the code above when running interpreted, the paths are those for powershell.exe
-        # rather than the script
-
-        # this prevents issues with external PS code when this script is compiled to a .exe:
-        Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-
-        # We are likely a compiled executable so we need to get the path like this:
-        $fullScriptPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-        $scriptFolder = [System.IO.Path]::GetDirectoryName($fullScriptPath)
-    }
-
-
-    $appDataPath = "$env:LOCALAPPDATA\TaskTamer"
-    $configPath = Join-Path -Path $appDataPath -ChildPath "\config.yaml"
-
-    $templatePath = Join-Path -Path $scriptFolder -ChildPath "\config-template.yaml"
-    $pauseIconPath = Join-Path -Path $scriptFolder -ChildPath "\images\pause.ico"
-    $playIconPath = Join-Path -Path $scriptFolder -ChildPath "\images\play.ico"
-
-    $shortcutPath = Join-Path -Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -ChildPath "TaskTamer.lnk"
-
-    # the actual characters (in the comments to the right)
-    # cannot be used because PowerShell 5.1 interpreter doesn't
-    # like reading in unicode characters during syntax checking
-    # (the ones in the comments here are ignored by it)
-    $BoxDrawingChars = @{
-        TopLeft     = [char]0x250C  # ┌
-        TopRight    = [char]0x2510  # ┐
-        BottomLeft  = [char]0x2514  # └
-        BottomRight = [char]0x2518  # ┘
-        Horizontal  = [char]0x2500  # ─
-        Vertical    = [char]0x2502  # │
-        TTop        = [char]0x252C  # ┬
-        TBottom     = [char]0x2534  # ┴
-        TLeft       = [char]0x251C  # ├
-        TRight      = [char]0x2524  # ┤
-        Cross       = [char]0x253C  # ┼
-    }
-
-    # Add necessary .NET assemblies for API calls
-    # using Add-Type cmdlet (C# code)
-    Add-Type -TypeDefinition @"
-    using System;
-    using System.Runtime.InteropServices;
-
-    namespace TaskTamer
-    {
-        public class ProcessManager
-        {
-            // suspend/resume functionality...
-
-            [DllImport("kernel32.dll", SetLastError = true)]
-            private static extern IntPtr OpenThread(int dwDesiredAccess, bool bInheritHandle, uint dwThreadId);
-
-            [DllImport("kernel32.dll", SetLastError = true)]
-            private static extern uint SuspendThread(IntPtr hThread);
-
-            [DllImport("kernel32.dll", SetLastError = true)]
-            private static extern int ResumeThread(IntPtr hThread);
-
-            [DllImport("kernel32.dll")]
-            private static extern bool CloseHandle(IntPtr hObject);
-
-            private const int THREAD_SUSPEND_RESUME = 0x0002;
-
-
-            public static void SuspendProcess(int pid)
-            {
-                var process = System.Diagnostics.Process.GetProcessById(pid);
-
-                foreach (System.Diagnostics.ProcessThread thread in process.Threads)
-                {
-                    IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
-
-                    if (pOpenThread != IntPtr.Zero)
-                    {
-                        if (SuspendThread(pOpenThread) == unchecked((uint)-1))
-                        {
-                            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                        }
-                        CloseHandle(pOpenThread);
-                    }
-                    else
-                    {
-                        // If OpenThread failed, throw an exception
-                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                    }
-                }
-            }
-
-
-            public static void ResumeProcess(int pid)
-            {
-                var process = System.Diagnostics.Process.GetProcessById(pid);
-
-                foreach (System.Diagnostics.ProcessThread thread in process.Threads)
-                {
-                    IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
-
-                    if (pOpenThread != IntPtr.Zero)
-                    {
-                        if (ResumeThread(pOpenThread) == -1)
-                        {
-                            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                        }
-                        CloseHandle(pOpenThread);
-                    }
-                    else
-                    {
-                        // If OpenThread failed, throw an exception
-                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                    }
-                }
-            }
-
-
-            // minimize windows functionality...
-
-            // Define constants for use with ShowWindow()
-            private const int SW_MINIMIZE = 6;
-            private const int SW_RESTORE = 9;
-
-
-            [DllImport("user32.dll")]
-            private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-            [DllImport("user32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            private static extern bool IsWindowVisible(IntPtr hWnd);
-
-            [DllImport("user32.dll")]
-            private static extern bool IsIconic(IntPtr hWnd);
-            // Checks if window is minimized (iconified)
-
-            [DllImport("user32.dll")]
-            public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
-
-            [DllImport("user32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-            // Delegate for enumerating windows
-            public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-            [DllImport("user32.dll")]
-            public static extern IntPtr GetParent(IntPtr hWnd);
-
-
-            // minimize all the user-facing windows of a specific process
-            // would be more efficient to provide it an array of PIDs and run only once
-            public static int MinimizeProcessWindows(int pid)
-            {
-                int numWindowsMinimized = 0;
-
-                EnumWindows((hWnd, lParam) =>
-                {
-                    int processId;
-                    GetWindowThreadProcessId(hWnd, out processId);
-
-                    // if the window belongs to the process we are interested in
-                    if (processId == pid)
-                    {
-                        // minimize top-level windows that are visible and not already minimized
-                        if (IsTopLevelWindow(hWnd) && IsWindowVisible(hWnd) && !IsIconic(hWnd))
-                        {
-                            if (ShowWindow(hWnd, SW_MINIMIZE))
-                            {
-                                numWindowsMinimized++;
-                            }
-                            else
-                            {
-                                Console.WriteLine("Process "+pid+" Window "+hWnd+" failed to minimise");
-                            }
-                        }
-                    }
-                    return true;
-                }, IntPtr.Zero);
-
-                return numWindowsMinimized;
-            }
-
-
-            // Helper function to check if the window is a top-level window
-            private static bool IsTopLevelWindow(IntPtr hWnd)
-            {
-                IntPtr hParent = GetParent(hWnd);
-                return hParent == IntPtr.Zero; // If the parent is null, it's a top-level window
-            }
-
-
-
-            [DllImport("kernel32.dll", SetLastError = true)]
-            private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
-
-            // force OS to decrease a process' working set
-            public static void TrimWorkingSet(int pid)
-            {
-                var process = System.Diagnostics.Process.GetProcessById(pid);
-
-                // When both dwMinimumWorkingSetSize and dwMaximumWorkingSetSize are set to -1, Windows will
-                // automatically trim the process’s working set to the bare minimum required to keep it
-                // running. This operation is often referred to as trimming the working set.
-
-                bool res = SetProcessWorkingSetSize(process.Handle, (IntPtr)(-1), (IntPtr)(-1));
-
-                if (!res)
-                {
-                    int errorCode = Marshal.GetLastWin32Error();
-                    throw new System.ComponentModel.Win32Exception(errorCode, "Failed to trim the working set for PID "+pid);
-                }
-            }
-
-        }
-    }
-
-"@
 
 
 
@@ -1232,7 +996,7 @@ function Invoke-TaskTamer
                                 else
                                 {
                                     Write-Verbose "$($proc.Name) ($($proc.Id)) priority is Idle - ignoring"
-                                    $processHistory[$proc.Id].priority = $null
+                                    #$processHistory[$proc.Id].priority = $null
                                 }
                             }
                             elseif ($Restore)
@@ -1397,8 +1161,10 @@ function Invoke-TaskTamer
         # Start with the provided process
         $currentProcess = $Process
 
+        $iterations = 0
+
         # Iterate backwards through the parent processes
-        while ($currentProcess)
+        while ($currentProcess -and $iterations -lt 10)
         {
             try
             {
@@ -1441,6 +1207,8 @@ function Invoke-TaskTamer
             {
                 throw "An error occurred while retrieving information about the process $($currentProcess.Name): $_"
             }
+
+            $iterations++
         }
 
         Write-Verbose "No launcher found for trigger process: $($Process.Name)."
@@ -1513,51 +1281,9 @@ function Invoke-TaskTamer
 
 
 
-    # Function to validate if a TargetPath (e.g. within a Windows Shortcut) has an existing target file
-    # the Target Path might have quotation marks around and spaces within the first argument
-    # and might include additional command line arguments
-    <#
-    function Test-CmdLineTarget
-    {
-        param (
-            [string]$CmdLine
-        )
-
-        Write-Verbose "Test-CmdLineTarget testing..."
-        Write-Verbose $CmdLine
-
-        # Use PowerShell's command-line parsing to properly handle quoted paths
-        #$cmdArgs = [System.Management.Automation.CommandLine]::ParseCommandLine($CmdLine)
-
-        # Create the ProcessStartInfo object
-        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $startInfo.Arguments = $CmdLine
-
-        # Parse the arguments
-        # FIXME: this doesnt work properly when there are quoted args with surrounding " marks
-        $cmdArgs = $startInfo.Arguments.Split(' ')
-
-        Write-Host "Parsed Arguments:"
-        Write-Host $cmdArgs
-
-        # The first element of $cmdArgs should be the target file
-        $targetFile = $cmdArgs[0]
-        Write-Verbose "targetFile: $targetFile"
-
-        # Check if the file exists
-        if (Test-Path $targetFile)
-        {
-            return $true
-        }
-        return $false
-    }
-    #>
-
-
-
     # merge two hashmaps into a new one
     # but any keys that start with '-' instruct us to remove that key from the returned hashmap
-    # (in PowerShell 7 we might just use the '+' operator)
+    # (in PowerShell 7 we might just use the '+' operator instead of this function)
     #
     # MaxDepth is used to limit the maximum depth of merging for nested hashtables
     #
@@ -2027,15 +1753,6 @@ namespace TaskTamer
 
 
 
-    # deletes the registry keys used to store volume levels and devices for all apps
-    #
-    function Reset-AppVolumes
-    {
-        Get-ChildItem -Path 'HKCU:\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore' |
-            Remove-Item -Recurse
-    }
-
-
     # run a series of custom commands supplied as an array of strings
     function Invoke-CustomCmds
     {
@@ -2085,6 +1802,7 @@ namespace TaskTamer
 
     # suspend all processes with a given name, starting with the oldest generation and ending with the leaves
     # ***************************** CURRENTLY UNUSED
+    #  TODO: use this instead of the current logic
     function Suspend-ProcessGroup
     {
         param (
@@ -2160,6 +1878,255 @@ namespace TaskTamer
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+
+
+
+
+
+
+    # retrive the path of the folder where the script/module is located
+    if (-not ([System.AppDomain]::CurrentDomain.FriendlyName -like "*.exe"))
+    {
+        Write-Verbose "Running interpreted"
+
+        if ($null -ne $MyInvocation.MyCommand.Module)
+        {
+            # running as module (.psm1)
+            $fullScriptPath = $MyInvocation.MyCommand.Module.Path
+        }
+        else
+        {
+            # running as script (.ps1)
+            $fullScriptPath = $MyInvocation.MyCommand.Path
+        }
+
+        $scriptFolder = Split-Path -Parent $fullScriptPath
+    }
+    else
+    {
+        Write-Verbose "Running compiled"
+        # if we try to use the code above when running interpreted, the paths are those for powershell.exe
+        # rather than the script
+
+        # this prevents issues with external PS code when this script is compiled to a .exe:
+        Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+
+        # We are likely a compiled executable so we need to get the path like this:
+        $fullScriptPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        $scriptFolder = [System.IO.Path]::GetDirectoryName($fullScriptPath)
+    }
+
+
+    $appDataPath = "$env:LOCALAPPDATA\TaskTamer"
+    $configPath = Join-Path -Path $appDataPath -ChildPath "\config.yaml"
+
+    $templatePath = Join-Path -Path $scriptFolder -ChildPath "\config-template.yaml"
+    $pauseIconPath = Join-Path -Path $scriptFolder -ChildPath "\images\pause.ico"
+    $playIconPath = Join-Path -Path $scriptFolder -ChildPath "\images\play.ico"
+
+    $shortcutPath = Join-Path -Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -ChildPath "TaskTamer.lnk"
+
+    # the actual characters (in the comments to the right)
+    # cannot be used because PowerShell 5.1 interpreter doesn't
+    # like reading in unicode characters during syntax checking
+    # (the ones in the comments here are ignored by it)
+    $BoxDrawingChars = @{
+        TopLeft     = [char]0x250C  # ┌
+        TopRight    = [char]0x2510  # ┐
+        BottomLeft  = [char]0x2514  # └
+        BottomRight = [char]0x2518  # ┘
+        Horizontal  = [char]0x2500  # ─
+        Vertical    = [char]0x2502  # │
+        TTop        = [char]0x252C  # ┬
+        TBottom     = [char]0x2534  # ┴
+        TLeft       = [char]0x251C  # ├
+        TRight      = [char]0x2524  # ┤
+        Cross       = [char]0x253C  # ┼
+    }
+
+    # Add necessary .NET assemblies for API calls
+    # using Add-Type cmdlet (C# code)
+    Add-Type -TypeDefinition @"
+    using System;
+    using System.Runtime.InteropServices;
+
+    namespace TaskTamer
+    {
+        public class ProcessManager
+        {
+            // suspend/resume functionality...
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern IntPtr OpenThread(int dwDesiredAccess, bool bInheritHandle, uint dwThreadId);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern uint SuspendThread(IntPtr hThread);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern int ResumeThread(IntPtr hThread);
+
+            [DllImport("kernel32.dll")]
+            private static extern bool CloseHandle(IntPtr hObject);
+
+            private const int THREAD_SUSPEND_RESUME = 0x0002;
+
+
+            public static void SuspendProcess(int pid)
+            {
+                var process = System.Diagnostics.Process.GetProcessById(pid);
+
+                foreach (System.Diagnostics.ProcessThread thread in process.Threads)
+                {
+                    IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
+
+                    if (pOpenThread != IntPtr.Zero)
+                    {
+                        if (SuspendThread(pOpenThread) == unchecked((uint)-1))
+                        {
+                            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                        }
+                        CloseHandle(pOpenThread);
+                    }
+                    else
+                    {
+                        // If OpenThread failed, throw an exception
+                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                    }
+                }
+            }
+
+
+            public static void ResumeProcess(int pid)
+            {
+                var process = System.Diagnostics.Process.GetProcessById(pid);
+
+                foreach (System.Diagnostics.ProcessThread thread in process.Threads)
+                {
+                    IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
+
+                    if (pOpenThread != IntPtr.Zero)
+                    {
+                        if (ResumeThread(pOpenThread) == -1)
+                        {
+                            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                        }
+                        CloseHandle(pOpenThread);
+                    }
+                    else
+                    {
+                        // If OpenThread failed, throw an exception
+                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                    }
+                }
+            }
+
+
+            // minimize windows functionality...
+
+            // Define constants for use with ShowWindow()
+            private const int SW_MINIMIZE = 6;
+            private const int SW_RESTORE = 9;
+
+
+            [DllImport("user32.dll")]
+            private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool IsWindowVisible(IntPtr hWnd);
+
+            [DllImport("user32.dll")]
+            private static extern bool IsIconic(IntPtr hWnd);
+            // Checks if window is minimized (iconified)
+
+            [DllImport("user32.dll")]
+            public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+            // Delegate for enumerating windows
+            public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+            [DllImport("user32.dll")]
+            public static extern IntPtr GetParent(IntPtr hWnd);
+
+
+            // minimize all the user-facing windows of a specific process
+            // would be more efficient to provide it an array of PIDs and run only once
+            public static int MinimizeProcessWindows(int pid)
+            {
+                int numWindowsMinimized = 0;
+
+                EnumWindows((hWnd, lParam) =>
+                {
+                    int processId;
+                    GetWindowThreadProcessId(hWnd, out processId);
+
+                    // if the window belongs to the process we are interested in
+                    if (processId == pid)
+                    {
+                        // minimize top-level windows that are visible and not already minimized
+                        if (IsTopLevelWindow(hWnd) && IsWindowVisible(hWnd) && !IsIconic(hWnd))
+                        {
+                            if (ShowWindow(hWnd, SW_MINIMIZE))
+                            {
+                                numWindowsMinimized++;
+                            }
+                            else
+                            {
+                                Console.WriteLine("Process "+pid+" Window "+hWnd+" failed to minimise");
+                            }
+                        }
+                    }
+                    return true;
+                }, IntPtr.Zero);
+
+                return numWindowsMinimized;
+            }
+
+
+            // Helper function to check if the window is a top-level window
+            private static bool IsTopLevelWindow(IntPtr hWnd)
+            {
+                IntPtr hParent = GetParent(hWnd);
+                return hParent == IntPtr.Zero; // If the parent is null, it's a top-level window
+            }
+
+
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
+
+            // force OS to decrease a process' working set
+            public static void TrimWorkingSet(int pid)
+            {
+                var process = System.Diagnostics.Process.GetProcessById(pid);
+
+                // When both dwMinimumWorkingSetSize and dwMaximumWorkingSetSize are set to -1, Windows will
+                // automatically trim the process’s working set to the bare minimum required to keep it
+                // running. This operation is often referred to as trimming the working set.
+
+                bool res = SetProcessWorkingSetSize(process.Handle, (IntPtr)(-1), (IntPtr)(-1));
+
+                if (!res)
+                {
+                    int errorCode = Marshal.GetLastWin32Error();
+                    throw new System.ComponentModel.Win32Exception(errorCode, "Failed to trim the working set for PID "+pid);
+                }
+            }
+
+        }
+    }
+
+"@
+
 
 
 
@@ -2382,7 +2349,12 @@ namespace TaskTamer
                         New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "Minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath -UniqueIdentifier "TaskTamer" -Sound IM -Header $notificationsHeader
                     }
 
+                    Write-Verbose "Checking for launcher..."
+
+                    # we get caught in a loop while looking for the launcher of Fortnite
+                    # somehow EOSOverlayRenderer is considered a parent process of EpicGamesLauncher even though EOSOverlayRenderer is a child of it!
                     $launcher = Find-Launcher -Process $runningTriggerProcess
+
                     if ($launcher)
                     {
                         Write-Host "**** Detected running using launcher '$launcher' ($($launchers[$launcher]))"
