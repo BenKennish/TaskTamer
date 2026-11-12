@@ -1513,6 +1513,7 @@ namespace TaskTamer
     public static class DisplaySettings
     {
         public const int ENUM_CURRENT_SETTINGS = -1;
+        public const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;
 
         [DllImport(
             "user32.dll",
@@ -1538,10 +1539,17 @@ namespace TaskTamer
             uint flags,
             IntPtr parameters);
 
+        [DllImport("shell32.dll")]
+        public static extern int SHQueryUserNotificationState(out int pquns);
+
+        [DllImport("user32.dll")]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+
     }
 }
 "@
-
+    # SHQueryUserNotificationState() is for querying whether a window is running in exclusive fullscren
 
     function Get-DisplayMode
     {
@@ -2125,6 +2133,7 @@ namespace TaskTamer
         }
     }
 
+
 "@
 
 
@@ -2432,6 +2441,8 @@ namespace TaskTamer
                     }
 
                     # Minimise windows of all target processes
+
+                    <#
                     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Minimising target process windows" -ForegroundColor Cyan
 
                     foreach ($proc in Get-Process | Where-Object {
@@ -2463,6 +2474,8 @@ namespace TaskTamer
                             Write-Error "!!!! Failed to minimise: $($proc.Name) ($($proc.Id)). Error: $_";
                         }
                     }
+
+                    #>
 
 
                     # switch display resolution if specified in the trigger process config
@@ -2498,12 +2511,28 @@ namespace TaskTamer
                             $modeText = "temporary"
                         }
 
+                        # TODO: we could refuse to change resolution if the game has exclusive fullscreen mode enabled
                         Write-Host ("**** Changing resolution: $($res.width)x$($res.height) ($($res.frequency)Hz) [$($modeText)] for trigger process '$($runningTriggerProcess.Name)'") -ForegroundColor Cyan
 
                         # Switch resolution
                         if (-not (Set-DisplayMode -Width $res.width -Height $res.height -Frequency $res.frequency -Temporary:$temporary))
                         {
                             Write-Warning "Set-DisplayMode failed, continuing with the current resolution"
+                        }
+                        else
+                        {
+                            $windowState = 0
+                            [TaskTamer.DisplaySettings]::SHQueryUserNotificationState([ref]$windowState) | Out-Null
+
+                            if ($windowState -ne [TaskTamer.DisplaySettings]::QUNS_RUNNING_D3D_FULL_SCREEN)
+                            {
+                                # if NOT running exclusive fullscreen, reposition and resize the trigger process window to fill the screen
+                                # this is in case the trigger process has already created the main window before we can change the resolution
+                                # (this is a bit of a hack, but it works)
+                                # 0x0044 = SWP_SHOWWINDOW | SWP_NOZORDER
+
+                                [TaskTamer.DisplaySettings]::SetWindowPos($runningTriggerProcess.MainWindowHandle, [IntPtr]::Zero, 0, 0, $res.width, $res.height, 0x0044)
+                            }
                         }
                     }
 
