@@ -1246,7 +1246,7 @@ function Invoke-TaskTamer
     {
         param (
             [Parameter(Mandatory = $true)]
-            [int]$Seconds,
+            [int]$Milliseconds,
 
             [Parameter(Mandatory = $true)]
             [char]$KeyCharacter,
@@ -1264,7 +1264,7 @@ function Invoke-TaskTamer
         }
         else
         {
-            $endTime = (Get-Date).AddSeconds($Seconds)
+            $endTime = (Get-Date).AddMilliseconds($Milliseconds)
 
             while ((Get-Date) -lt $endTime)
             {
@@ -2777,7 +2777,7 @@ namespace TaskTamer
                 }
 
                 Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds... { Press Q to Quit }"
-                if (Wait-ForKeyPress -Seconds 3 -KeyCharacter "Q")
+                if (Wait-ForKeyPress -Milliseconds 3000 -KeyCharacter "Q")
                 {
                     break # out of while()
                 }
@@ -2792,10 +2792,21 @@ namespace TaskTamer
                     break
                 }
 
-                if (Wait-ForKeyPress -Seconds 3 -KeyCharacter "Q")
+
+                if (Test-KeyPress -KeyCharacter "Q")
                 {
                     break # out of while()
                 }
+                Start-Sleep -Milliseconds 250
+                # maybe make this value configurable
+
+                # this method lets you wait longer before polling again for trigger processes
+                # but still respond quickly to a keypress
+                #if (Wait-ForKeyPress -Milliseconds 1000 -KeyCharacter "Q")
+                #{
+                #    break # out of while()
+                #}
+
             }
         }
     }
