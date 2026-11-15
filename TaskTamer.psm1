@@ -1539,17 +1539,19 @@ namespace TaskTamer
             uint flags,
             IntPtr parameters);
 
+        // this function will return QUNS_RUNNING_D3D_FULL_SCREEN if a full-screen (exclusive mode) Direct3D application is running.
         [DllImport("shell32.dll")]
         public static extern int SHQueryUserNotificationState(out int pquns);
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
 
 
     }
 }
 "@
-    # SHQueryUserNotificationState() is for querying whether a window is running in exclusive fullscren
+
 
     function Get-DisplayMode
     {
@@ -2507,7 +2509,7 @@ namespace TaskTamer
                             $modeText = "temporary"
                         }
 
-                        # TODO: we could refuse to change resolution if the game has exclusive fullscreen mode enabled
+                        # TODO: refuse to change resolution if the game has exclusive fullscreen mode enabled?
                         Write-Host ("**** Changing resolution: $($res.width)x$($res.height) ($($res.frequency)Hz) [$($modeText)] for trigger process '$($runningTriggerProcess.Name)'") -ForegroundColor Cyan
 
                         # Switch resolution
@@ -2517,18 +2519,55 @@ namespace TaskTamer
                         }
                         else
                         {
-                            $windowState = 0
-                            [TaskTamer.DisplaySettings]::SHQueryUserNotificationState([ref]$windowState) | Out-Null
+                            <#
+                            # allow resolution change to take effect and for window to resize itself if it notices
+                            Start-Sleep -Milliseconds 3000
 
-                            if ($windowState -ne [TaskTamer.DisplaySettings]::QUNS_RUNNING_D3D_FULL_SCREEN)
+                            $userNotificationState = 0
+                            [TaskTamer.DisplaySettings]::SHQueryUserNotificationState([ref]$userNotificationState) | Out-Null
+
+                            if ($userNotificationState -ne [TaskTamer.DisplaySettings]::QUNS_RUNNING_D3D_FULL_SCREEN)
                             {
                                 # if NOT running exclusive fullscreen, reposition and resize the trigger process window to fill the screen
-                                # this is in case the trigger process has already created the main window before we can change the resolution
-                                # (this is a bit of a hack, but it works)
-                                # 0x0044 = SWP_SHOWWINDOW | SWP_NOZORDER
+                                # why?  if the trigger process has already created its main window before we change the resolution
+                                # it will likely be out of position and/or the wrong size
 
-                                [TaskTamer.DisplaySettings]::SetWindowPos($runningTriggerProcess.MainWindowHandle, [IntPtr]::Zero, 0, 0, $res.width, $res.height, 0x0044)
+                                # 0x0044 = SWP_SHOWWINDOW | SWP_NOZORDER
+                                Write-Host ("**** Filling trigger process window to screen") -ForegroundColor Cyan
+
+                                $runningTriggerProcess.Refresh()
+
+                                if ($runningTriggerProcess.MainWindowHandle)
+                                {
+                                    $screenBounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+                                    $success = [TaskTamer.DisplaySettings]::SetWindowPos(
+                                        $runningTriggerProcess.MainWindowHandle,
+                                        [IntPtr]::Zero,
+                                        $screenBounds.X,
+                                        $screenBounds.Y,
+                                        $screenBounds.Width,
+                                        $screenBounds.Height,
+                                        0x0044
+                                    )
+
+                                    if (-not $success)
+                                    {
+                                        $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                                        $errorMessage = ([System.ComponentModel.Win32Exception]$errorCode).Message
+                                        Write-Warning "SetWindowPos failed (Error $errorCode): $errorMessage"
+                                    }
+                                }
+                                else
+                                {
+                                    Write-Warning "Trigger process '$($runningTriggerProcess.Name)' ($($runningTriggerProcess.Id)) has no main window handle, cannot fill window to screen"
+                                }
                             }
+                            else
+                            {
+                                Write-Host "Something is running in exclusive fullscreen mode - not filling window to screen" -ForegroundColor Cyan
+                            }
+
+                            #>
                         }
                     }
 
@@ -2698,6 +2737,7 @@ namespace TaskTamer
                 Set-TargetProcessesState -Restore -Launcher $launcher | Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS_WITH_RAM_DELTA -ColumnFormats $COLUMN_FORMATS_WITH_RAM_DELTA
 
                 $throttledProcesses = $false
+
 
 
                 # Overwatch config file patch for 'BroadcastMarginLeft'
