@@ -4,6 +4,7 @@ lock.pid
 *.exe
 *.zip
 *.lnk
+AHK-TaskTamer-Manager.ps1
 
 # excludes certain files Ben uses
 .prettierrc
