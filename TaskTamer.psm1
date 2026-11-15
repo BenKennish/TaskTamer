@@ -2441,8 +2441,6 @@ namespace TaskTamer
                     }
 
                     # Minimise windows of all target processes
-
-                    <#
                     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Minimising target process windows" -ForegroundColor Cyan
 
                     foreach ($proc in Get-Process | Where-Object {
@@ -2474,8 +2472,6 @@ namespace TaskTamer
                             Write-Error "!!!! Failed to minimise: $($proc.Name) ($($proc.Id)). Error: $_";
                         }
                     }
-
-                    #>
 
 
                     # switch display resolution if specified in the trigger process config
