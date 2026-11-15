@@ -1259,7 +1259,7 @@ function Invoke-TaskTamer
         if ($WaitFullDuration)
         {
             # sleep the whole duration
-            Start-Sleep -Seconds $Seconds
+            Start-Sleep -Milliseconds $Milliseconds
             return Test-KeyPress -KeyCharacter $KeyCharacter
         }
         else
@@ -2822,7 +2822,7 @@ namespace TaskTamer
         #Write-Host "Script  : $($_.InvocationInfo.PSCommandPath)" -ForegroundColor DarkRed
         Write-Host ""
         Write-Host "Exiting in 10s. Press space to exit immediately..."
-        $null = Wait-ForKeyPress -Seconds 10 -KeyCharacter ' '
+        $null = Wait-ForKeyPress -MilliSeconds 10000 -KeyCharacter ' '
     }
     finally
     {
