@@ -2687,7 +2687,8 @@ namespace TaskTamer
                     # old way of doing it that cannot be broken out of with Ctrl-C
                     #$runningTriggerProcess.WaitForExit()
 
-                    # pipeline - wait for all the trigger processes to exit
+                    # wait for all the trigger processes to exit
+                    # this is very CPU efficient (< 0.01% usage)
                     $runningTriggerProcesses | Wait-Process
                 }
 
@@ -2812,6 +2813,7 @@ namespace TaskTamer
                     break
                 }
 
+                # wait a short time before checking for trigger processes again
                 Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sleeping for 3 seconds... { Press Q to Quit }"
                 if (Wait-ForKeyPress -Milliseconds 3000 -KeyCharacter "Q")
                 {
@@ -2821,27 +2823,31 @@ namespace TaskTamer
             }
             else
             {
-                # no trigger processes detected
+                # no trigger processes detected this time
+
                 if ($CheckOnce)
                 {
                     Write-Host "No trigger process was detected."
                     break
                 }
 
-
                 if (Test-KeyPress -KeyCharacter "Q")
                 {
                     break # out of while()
                 }
-                Start-Sleep -Milliseconds 250
-                # maybe make this value configurable
+                Start-Sleep -Milliseconds 300
+                # this value determines the CPU usage of the script while waiting for a trigger process
+                # 250 gives ~ 0.8% CPU usage on Ben's PC
+                # 300 gives ~ 0.6% CPU usage on Ben's PC
 
+                <#
                 # this method lets you wait longer before polling again for trigger processes
                 # but still respond quickly to a keypress
-                #if (Wait-ForKeyPress -Milliseconds 1000 -KeyCharacter "Q")
-                #{
-                #    break # out of while()
-                #}
+                if (Wait-ForKeyPress -Milliseconds 250 -KeyCharacter "Q")
+                {
+                    break # out of while()
+                }
+                #>
 
             }
         }
@@ -2857,8 +2863,8 @@ namespace TaskTamer
         #Write-Host "Line    : $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor DarkRed
         #Write-Host "Script  : $($_.InvocationInfo.PSCommandPath)" -ForegroundColor DarkRed
         Write-Host ""
-        Write-Host "Exiting in 10s. Press space to exit immediately..."
-        $null = Wait-ForKeyPress -MilliSeconds 10000 -KeyCharacter ' '
+        Write-Host "Exiting in 10s. Press Q to quit immediately..."
+        $null = Wait-ForKeyPress -MilliSeconds 10000 -KeyCharacter 'Q'
     }
     finally
     {
