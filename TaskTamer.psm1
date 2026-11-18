@@ -156,7 +156,7 @@ function Invoke-TaskTamer
         [switch]$WhatIf
     )
 
-    # setup code that runs before any functinos are defined
+    # setup code that runs before any functions are defined
 
     Set-Variable -Name COLUMN_HEADINGS -Option Constant -Value @("NAME", "PID", "RAM", "ACTION", "DETAILS")
     Set-Variable -Name COLUMN_FORMATS  -Option Constant -Value @("{0,-17}", "{0,-6}", "{0,11}", "{0,-13}", "{0,-20}")
@@ -199,6 +199,286 @@ function Invoke-TaskTamer
     $OutputEncoding = [System.Text.Encoding]::UTF8
 
     $previousEnv['WindowTitle'] = $host.UI.RawUI.WindowTitle
+
+
+    # ====================================================
+    # ====================================================
+    # ====================================================
+    # ====================================================
+
+    # now the C# function import things
+
+    Add-Type -ErrorAction Stop -TypeDefinition @"
+
+using System;
+using System.Runtime.InteropServices;
+
+namespace TaskTamer
+{
+    [Flags]
+    public enum DisplayFields : uint
+    {
+        PelsWidth = 0x00080000,
+        PelsHeight = 0x00100000,
+        DisplayFrequency = 0x00400000,
+        CurrentMode = PelsWidth | PelsHeight | DisplayFrequency
+    }
+
+    [Flags]
+    public enum ChangeDisplaySettingsFlags : uint
+    {
+        None = 0x00000000,
+        Test = 0x00000002,
+        Fullscreen = 0x00000004
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DEVMODE
+    {
+        private const int CCHDEVICENAME = 32;
+        private const int CCHFORMNAME = 32;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
+        public string dmDeviceName;
+
+        public ushort dmSpecVersion;
+        public ushort dmDriverVersion;
+        public ushort dmSize;
+        public ushort dmDriverExtra;
+        public uint dmFields;
+
+        // Display version of DEVMODE's anonymous union
+        public int dmPositionX;
+        public int dmPositionY;
+        public uint dmDisplayOrientation;
+        public uint dmDisplayFixedOutput;
+
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHFORMNAME)]
+        public string dmFormName;
+
+        public ushort dmLogPixels;
+        public uint dmBitsPerPel;
+        public uint dmPelsWidth;
+        public uint dmPelsHeight;
+        public uint dmDisplayFlags;
+        public uint dmDisplayFrequency;
+    }
+
+    public static class DisplaySettings
+    {
+        public const int ENUM_CURRENT_SETTINGS = -1;
+        public const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;
+
+        [DllImport(
+            "user32.dll",
+            EntryPoint = "EnumDisplaySettingsExW",
+            CharSet = CharSet.Unicode,
+            ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool EnumDisplaySettingsEx(
+            [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
+            int modeNum,
+            [In, Out] ref DEVMODE devMode,
+            uint flags);
+
+        [DllImport(
+            "user32.dll",
+            EntryPoint = "ChangeDisplaySettingsExW",
+            CharSet = CharSet.Unicode,
+            ExactSpelling = true)]
+        public static extern int ChangeDisplaySettingsEx(
+            [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
+            ref DEVMODE devMode,
+            IntPtr windowHandle,
+            uint flags,
+            IntPtr parameters);
+
+        // this function will return QUNS_RUNNING_D3D_FULL_SCREEN if a full-screen (exclusive mode) Direct3D application is running.
+        [DllImport("shell32.dll")]
+        public static extern int SHQueryUserNotificationState(out int pquns);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    }
+
+
+    public class ProcessManager
+    {
+        // suspend/resume functionality...
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenThread(int dwDesiredAccess, bool bInheritHandle, uint dwThreadId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint SuspendThread(IntPtr hThread);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern int ResumeThread(IntPtr hThread);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        private const int THREAD_SUSPEND_RESUME = 0x0002;
+
+
+        public static void SuspendProcess(int pid)
+        {
+            var process = System.Diagnostics.Process.GetProcessById(pid);
+
+            foreach (System.Diagnostics.ProcessThread thread in process.Threads)
+            {
+                IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
+
+                if (pOpenThread != IntPtr.Zero)
+                {
+                    if (SuspendThread(pOpenThread) == unchecked((uint)-1))
+                    {
+                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                    }
+                    CloseHandle(pOpenThread);
+                }
+                else
+                {
+                    // If OpenThread failed, throw an exception
+                    Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                }
+            }
+        }
+
+
+        public static void ResumeProcess(int pid)
+        {
+            var process = System.Diagnostics.Process.GetProcessById(pid);
+
+            foreach (System.Diagnostics.ProcessThread thread in process.Threads)
+            {
+                IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
+
+                if (pOpenThread != IntPtr.Zero)
+                {
+                    if (ResumeThread(pOpenThread) == -1)
+                    {
+                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                    }
+                    CloseHandle(pOpenThread);
+                }
+                else
+                {
+                    // If OpenThread failed, throw an exception
+                    Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                }
+            }
+        }
+
+
+        // minimize windows functionality...
+
+        // Define constants for use with ShowWindow()
+        private const int SW_MINIMIZE = 6;
+        private const int SW_RESTORE = 9;
+
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+        // Checks if window is minimized (iconified)
+
+        [DllImport("user32.dll")]
+        public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        // Delegate for enumerating windows
+        public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetParent(IntPtr hWnd);
+
+
+        // minimize all the user-facing windows of a specific process
+        // would be more efficient to provide it an array of PIDs and run only once
+        public static int MinimizeProcessWindows(int pid)
+        {
+            int numWindowsMinimized = 0;
+
+            EnumWindows((hWnd, lParam) =>
+            {
+                int processId;
+                GetWindowThreadProcessId(hWnd, out processId);
+
+                // if the window belongs to the process we are interested in
+                if (processId == pid)
+                {
+                    // minimize top-level windows that are visible and not already minimized
+                    if (IsTopLevelWindow(hWnd) && IsWindowVisible(hWnd) && !IsIconic(hWnd))
+                    {
+                        if (ShowWindow(hWnd, SW_MINIMIZE))
+                        {
+                            numWindowsMinimized++;
+                        }
+                        else
+                        {
+                            Console.WriteLine("Process "+pid+" Window "+hWnd+" failed to minimise");
+                        }
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            return numWindowsMinimized;
+        }
+
+
+        // Helper function to check if the window is a top-level window
+        private static bool IsTopLevelWindow(IntPtr hWnd)
+        {
+            IntPtr hParent = GetParent(hWnd);
+            return hParent == IntPtr.Zero; // If the parent is null, it's a top-level window
+        }
+
+
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
+
+        // force OS to decrease a process' working set
+        public static void TrimWorkingSet(int pid)
+        {
+            var process = System.Diagnostics.Process.GetProcessById(pid);
+
+            // When both dwMinimumWorkingSetSize and dwMaximumWorkingSetSize are set to -1, Windows will
+            // automatically trim the process’s working set to the bare minimum required to keep it
+            // running. This operation is often referred to as trimming the working set.
+
+            bool res = SetProcessWorkingSetSize(process.Handle, (IntPtr)(-1), (IntPtr)(-1));
+
+            if (!res)
+            {
+                int errorCode = Marshal.GetLastWin32Error();
+                throw new System.ComponentModel.Win32Exception(errorCode, "Failed to trim the working set for PID "+pid);
+            }
+        }
+
+    }
+
+}
+"@
+
 
 
     # ====================================================
@@ -622,7 +902,7 @@ function Invoke-TaskTamer
     {
         param (
             [Parameter(Mandatory = $true)] [int64]$Bytes,
-            [switch]$NegativeIsPositive # if set, the more negative a number is, the better it is.
+            [switch]$NegativeIsPositive   # if set, the more negative a number is, the better (more "positive") it is.
         )
 
         if ($NegativeIsPositive -and $Bytes -gt 0)
@@ -1163,7 +1443,7 @@ function Invoke-TaskTamer
 
         $iterations = 0
 
-        # Iterate backwards through the parent processes
+        # Iterate backwards through the parent processes, but only a maximum of 10 times
         while ($currentProcess -and $iterations -lt 10)
         {
             try
@@ -1339,6 +1619,7 @@ function Invoke-TaskTamer
                     {
                         Write-Verbose "Merge-Hashmaps: Recursing to merge the two hashtables at key '$key'..."
                         $merged[$key] = Merge-Hashmaps -Default $merged[$key] -Override $Override[$key] -MaxDepth ($MaxDepth - 1)
+                        # ^ recursive call with MaxDepth reduced by 1
                     }
                     else
                     {
@@ -1392,165 +1673,6 @@ function Invoke-TaskTamer
         return $config
     }
 
-
-    # Function to check if a file is accessible
-    function Wait-ForFileUnlock
-    {
-        param (
-            [Parameter(Mandatory = $true)]
-            [String]$Path,
-
-            [int]$TimeoutSeconds = 30
-        )
-
-        $endTime = (Get-Date).AddSeconds($TimeoutSeconds)
-        do
-        {
-            try
-            {
-                # Attempt to open the file in exclusive mode
-                # Opens file, in read-write mode, no sharing allowed
-                $stream = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
-
-                $stream.Close()
-                return $true
-            }
-            catch [System.IO.FileNotFoundException]
-            {
-                Write-Host "Error: The file $Path was not found." -ForegroundColor DarkRed
-                break
-            }
-            catch [System.UnauthorizedAccessException]
-            {
-                Write-Host "Error: You do not have permission to access $Path." -ForegroundColor DarkRed
-                break
-            }
-            catch [System.ArgumentException]
-            {
-                Write-Host $_
-                Write-Host "Error: The file path is invalid." -ForegroundColor DarkRed
-                break
-            }
-            catch [System.IO.IOException]
-            {
-                Write-Host "Error: The file is already in use."
-                Start-Sleep -Milliseconds 500
-            }
-            catch
-            {
-                Write-Host "Unexpected error: $_"
-                Start-Sleep -Milliseconds 500
-            }
-        }
-        while ((Get-Date) -lt $endTime)
-
-        return $false
-    }
-
-
-    Add-Type -ErrorAction Stop -TypeDefinition @"
-
-using System;
-using System.Runtime.InteropServices;
-
-namespace TaskTamer
-{
-    [Flags]
-    public enum DisplayFields : uint
-    {
-        PelsWidth = 0x00080000,
-        PelsHeight = 0x00100000,
-        DisplayFrequency = 0x00400000,
-        CurrentMode = PelsWidth | PelsHeight | DisplayFrequency
-    }
-
-    [Flags]
-    public enum ChangeDisplaySettingsFlags : uint
-    {
-        None = 0x00000000,
-        Test = 0x00000002,
-        Fullscreen = 0x00000004
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct DEVMODE
-    {
-        private const int CCHDEVICENAME = 32;
-        private const int CCHFORMNAME = 32;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
-        public string dmDeviceName;
-
-        public ushort dmSpecVersion;
-        public ushort dmDriverVersion;
-        public ushort dmSize;
-        public ushort dmDriverExtra;
-        public uint dmFields;
-
-        // Display version of DEVMODE's anonymous union
-        public int dmPositionX;
-        public int dmPositionY;
-        public uint dmDisplayOrientation;
-        public uint dmDisplayFixedOutput;
-
-        public short dmColor;
-        public short dmDuplex;
-        public short dmYResolution;
-        public short dmTTOption;
-        public short dmCollate;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHFORMNAME)]
-        public string dmFormName;
-
-        public ushort dmLogPixels;
-        public uint dmBitsPerPel;
-        public uint dmPelsWidth;
-        public uint dmPelsHeight;
-        public uint dmDisplayFlags;
-        public uint dmDisplayFrequency;
-    }
-
-    public static class DisplaySettings
-    {
-        public const int ENUM_CURRENT_SETTINGS = -1;
-        public const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;
-
-        [DllImport(
-            "user32.dll",
-            EntryPoint = "EnumDisplaySettingsExW",
-            CharSet = CharSet.Unicode,
-            ExactSpelling = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool EnumDisplaySettingsEx(
-            [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
-            int modeNum,
-            [In, Out] ref DEVMODE devMode,
-            uint flags);
-
-        [DllImport(
-            "user32.dll",
-            EntryPoint = "ChangeDisplaySettingsExW",
-            CharSet = CharSet.Unicode,
-            ExactSpelling = true)]
-        public static extern int ChangeDisplaySettingsEx(
-            [MarshalAs(UnmanagedType.LPWStr)] string deviceName,
-            ref DEVMODE devMode,
-            IntPtr windowHandle,
-            uint flags,
-            IntPtr parameters);
-
-        // this function will return QUNS_RUNNING_D3D_FULL_SCREEN if a full-screen (exclusive mode) Direct3D application is running.
-        [DllImport("shell32.dll")]
-        public static extern int SHQueryUserNotificationState(out int pquns);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-
-
-
-    }
-}
-"@
 
 
     function Get-DisplayMode
@@ -1684,84 +1806,6 @@ namespace TaskTamer
     }
 
 
-    # use HDRCmd.exe to get retrieve the current HDR status
-    # returns either $true (enabled), $false (disabled) or $null (HDR not supported / error)
-    function Get-HDRStatus
-    {
-        if ($config -and $config.hdrcmd_path)
-        {
-            if (-not (Test-Path -Path $config.hdrcmd_path))
-            {
-                Write-Warning "HDRCmd.exe not found at configured path '$($config.hdrcmd_path)'"
-                return $null
-            }
-
-            $output = ((& $config.hdrcmd_path status --mode exitcode) -join "`n").Trim()
-            $exitCode = $LASTEXITCODE
-
-            switch ($exitCode)
-            {
-                0 { return $true }  # HDR enabled
-                1 { return $false } # HDR disabled
-                2 { return $null }  # HDR not supported
-                default
-                {
-                    Write-Warning "HDRCmd.exe returned unknown exit code $exitCode"
-                    Write-Warning "Output: $output"
-                    return $null
-                }
-            }
-        }
-        else
-        {
-            Write-Warning "hdrcmd_path not configured in config.yaml"
-            return $null
-        }
-    }
-
-    # euse HDRCmd.exe to get enable or disable HDR status
-    function Set-HDRStatus
-    {
-        param (
-            [Parameter(Mandatory = $true)]
-            [bool]$Enabled
-        )
-
-        if ($config -and $config.hdrcmd_path)
-        {
-            if (-not (Test-Path -Path $config.hdrcmd_path))
-            {
-                Write-Warning "HDRCmd.exe not found at configured path '$($config.hdrcmd_path)' - cannot enable/disable HDR"
-                return
-            }
-
-            $arg = if ($Enabled) { 'on' } else { 'off' }
-
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Setting HDR to '$arg'..." -ForegroundColor Cyan
-
-            $output = ((& $config.hdrcmd_path $arg) -join "`n").Trim()
-            $exitCode = $LASTEXITCODE
-
-            if ($exitCode -ne 0)
-            {
-                Write-Warning "HDRCmd.exe exited with code $exitCode"
-                if ($output)
-                {
-                    Write-Warning "Output: $output"
-                }
-            }
-            else
-            {
-                Write-Verbose "HDRCmd.exe set HDR status successfully."
-                if ($output)
-                {
-                    Write-Host "HDRCmd.exe Output: $output"
-                }
-            }
-        }
-    }
-
-
 
     # run a series of custom commands supplied as an array of strings
     function Invoke-CustomCmds
@@ -1810,79 +1854,6 @@ namespace TaskTamer
     }
 
 
-    # suspend all processes with a given name, starting with the oldest generation and ending with the leaves
-    # ***************************** CURRENTLY UNUSED
-    #  TODO: use this instead of the current logic
-    function Suspend-ProcessGroup
-    {
-        param (
-            [Parameter(Mandatory = $true)]
-            [string]$Name
-        )
-
-        # Get all processes with the specified name
-        $processes = Get-CimInstance Win32_Process -Filter "Name = '$Name'"
-
-        # Build parent -> children mapping and root processes
-        $parentToChildren = @{}
-        $allProcessPids = @{}
-        $procByPid = @{}
-
-        foreach ($proc in $processes)
-        {
-            $allProcessPids[$proc.ProcessId] = $true
-            $procByPid[$proc.ProcessId] = $proc
-            $parentToChildren[$proc.ProcessId] = @()
-        }
-
-        # Build parent -> same process children relationships
-        foreach ($proc in $processes)
-        {
-            $parentPid = $proc.ParentProcessId
-            if ($allProcessPids.ContainsKey($parentPid))
-            {
-                $parentToChildren[$parentPid] += $proc.ProcessId
-            }
-        }
-
-        # Find root Chrome processes (no Chrome parent = parentPid not in allChromePids)
-        $roots = $chromeProcs | Where-Object {
-            $parentPid = $_.ParentProcessId
-            -not $allChromePids.ContainsKey($parentPid)
-        } | ForEach-Object { $_.ProcessId }
-
-        $suspended = @{}
-        $queue = [System.Collections.Queue]::new()
-        $queue.EnqueueRange($roots)
-
-        while ($queue.Count -gt 0)
-        {
-            $procId = $queue.Dequeue()
-            if ($suspended.ContainsKey($procId)) { continue }
-
-            Write-Host "Suspending chrome.exe PID $pid (parent first)"
-            if ([ProcessSuspend]::SuspendProcess($procId))
-            {
-                $suspended[$pid] = $true
-
-                # Add all its Chrome children to queue (now safe to suspend)
-                foreach ($childPid in $parentToChildren[$procId])
-                {
-                    if (-not $suspended.ContainsKey($childPid))
-                    {
-                        $queue.Enqueue($childPid)
-                    }
-                }
-            }
-        }
-
-        Write-Host "Suspended $($suspended.Count) chrome.exe processes top-down"
-        return $suspended.Keys
-    }
-
-
-
-
 
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
@@ -1893,9 +1864,6 @@ namespace TaskTamer
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
     # -------------------------------------------------------------------------
-
-
-
 
 
 
@@ -1958,186 +1926,6 @@ namespace TaskTamer
         TRight      = [char]0x2524  # ┤
         Cross       = [char]0x253C  # ┼
     }
-
-    # Add necessary .NET assemblies for API calls
-    # using Add-Type cmdlet (C# code)
-    Add-Type -TypeDefinition @"
-    using System;
-    using System.Runtime.InteropServices;
-
-    namespace TaskTamer
-    {
-        public class ProcessManager
-        {
-            // suspend/resume functionality...
-
-            [DllImport("kernel32.dll", SetLastError = true)]
-            private static extern IntPtr OpenThread(int dwDesiredAccess, bool bInheritHandle, uint dwThreadId);
-
-            [DllImport("kernel32.dll", SetLastError = true)]
-            private static extern uint SuspendThread(IntPtr hThread);
-
-            [DllImport("kernel32.dll", SetLastError = true)]
-            private static extern int ResumeThread(IntPtr hThread);
-
-            [DllImport("kernel32.dll")]
-            private static extern bool CloseHandle(IntPtr hObject);
-
-            private const int THREAD_SUSPEND_RESUME = 0x0002;
-
-
-            public static void SuspendProcess(int pid)
-            {
-                var process = System.Diagnostics.Process.GetProcessById(pid);
-
-                foreach (System.Diagnostics.ProcessThread thread in process.Threads)
-                {
-                    IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
-
-                    if (pOpenThread != IntPtr.Zero)
-                    {
-                        if (SuspendThread(pOpenThread) == unchecked((uint)-1))
-                        {
-                            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                        }
-                        CloseHandle(pOpenThread);
-                    }
-                    else
-                    {
-                        // If OpenThread failed, throw an exception
-                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                    }
-                }
-            }
-
-
-            public static void ResumeProcess(int pid)
-            {
-                var process = System.Diagnostics.Process.GetProcessById(pid);
-
-                foreach (System.Diagnostics.ProcessThread thread in process.Threads)
-                {
-                    IntPtr pOpenThread = OpenThread(THREAD_SUSPEND_RESUME, false, (uint)thread.Id);
-
-                    if (pOpenThread != IntPtr.Zero)
-                    {
-                        if (ResumeThread(pOpenThread) == -1)
-                        {
-                            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                        }
-                        CloseHandle(pOpenThread);
-                    }
-                    else
-                    {
-                        // If OpenThread failed, throw an exception
-                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                    }
-                }
-            }
-
-
-            // minimize windows functionality...
-
-            // Define constants for use with ShowWindow()
-            private const int SW_MINIMIZE = 6;
-            private const int SW_RESTORE = 9;
-
-
-            [DllImport("user32.dll")]
-            private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-            [DllImport("user32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            private static extern bool IsWindowVisible(IntPtr hWnd);
-
-            [DllImport("user32.dll")]
-            private static extern bool IsIconic(IntPtr hWnd);
-            // Checks if window is minimized (iconified)
-
-            [DllImport("user32.dll")]
-            public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
-
-            [DllImport("user32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-            // Delegate for enumerating windows
-            public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-            [DllImport("user32.dll")]
-            public static extern IntPtr GetParent(IntPtr hWnd);
-
-
-            // minimize all the user-facing windows of a specific process
-            // would be more efficient to provide it an array of PIDs and run only once
-            public static int MinimizeProcessWindows(int pid)
-            {
-                int numWindowsMinimized = 0;
-
-                EnumWindows((hWnd, lParam) =>
-                {
-                    int processId;
-                    GetWindowThreadProcessId(hWnd, out processId);
-
-                    // if the window belongs to the process we are interested in
-                    if (processId == pid)
-                    {
-                        // minimize top-level windows that are visible and not already minimized
-                        if (IsTopLevelWindow(hWnd) && IsWindowVisible(hWnd) && !IsIconic(hWnd))
-                        {
-                            if (ShowWindow(hWnd, SW_MINIMIZE))
-                            {
-                                numWindowsMinimized++;
-                            }
-                            else
-                            {
-                                Console.WriteLine("Process "+pid+" Window "+hWnd+" failed to minimise");
-                            }
-                        }
-                    }
-                    return true;
-                }, IntPtr.Zero);
-
-                return numWindowsMinimized;
-            }
-
-
-            // Helper function to check if the window is a top-level window
-            private static bool IsTopLevelWindow(IntPtr hWnd)
-            {
-                IntPtr hParent = GetParent(hWnd);
-                return hParent == IntPtr.Zero; // If the parent is null, it's a top-level window
-            }
-
-
-
-            [DllImport("kernel32.dll", SetLastError = true)]
-            private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
-
-            // force OS to decrease a process' working set
-            public static void TrimWorkingSet(int pid)
-            {
-                var process = System.Diagnostics.Process.GetProcessById(pid);
-
-                // When both dwMinimumWorkingSetSize and dwMaximumWorkingSetSize are set to -1, Windows will
-                // automatically trim the process’s working set to the bare minimum required to keep it
-                // running. This operation is often referred to as trimming the working set.
-
-                bool res = SetProcessWorkingSetSize(process.Handle, (IntPtr)(-1), (IntPtr)(-1));
-
-                if (!res)
-                {
-                    int errorCode = Marshal.GetLastWin32Error();
-                    throw new System.ComponentModel.Win32Exception(errorCode, "Failed to trim the working set for PID "+pid);
-                }
-            }
-
-        }
-    }
-
-
-"@
-
 
 
 
@@ -2321,8 +2109,6 @@ namespace TaskTamer
             # stores the previous resolution if a trigger process configuration requires switching resolution
             $previousResolution = $null
 
-            # stores the previous HDR state if a trigger process configuration requires enabling/disabling HDR
-            $previousHDRStatus = $null
 
             # NB: hashtables are case INsensitive w.r.t. their keys by default
 
@@ -2348,13 +2134,6 @@ namespace TaskTamer
                         Write-Warning "This trigger process is not running with PriorityBoost enabled"
                     }
 
-                    # FIXME: this will wait for each trigger process instance found
-                    if ($config['delay_before_monitor_trigger_close'] -and $config['delay_before_monitor_trigger_close'] -gt 0)
-                    {
-                        Write-Host "**** Waiting for $($config['delay_before_monitor_trigger_close'])s before checking for trigger process exit..." -ForegroundColor Cyan
-                        Start-Sleep -Seconds $config['delay_before_monitor_trigger_close']
-                    }
-
                     if ($config['show_notifications'])
                     {
                         New-BurntToastNotification -Text "$($runningTriggerProcess.Name) is running", "Minimising and suspending target processes to improve performance." -AppLogo $pauseIconPath -UniqueIdentifier "TaskTamer" -Sound IM -Header $notificationsHeader
@@ -2371,6 +2150,7 @@ namespace TaskTamer
                         Write-Host "**** Detected running using launcher '$launcher' ($($launchers[$launcher]))"
                     }
 
+                    # process any target process overrides that thi
                     if (-not ($processedTargetProcessOverridesFor[$runningTriggerProcess.Name]) `
                             -and $config['trigger_processes'][$runningTriggerProcess.Name] `
                             -and $config['trigger_processes'][$runningTriggerProcess.Name].ContainsKey('target_process_overrides'))
@@ -2571,35 +2351,7 @@ namespace TaskTamer
                         }
                     }
 
-                    # TODO: perhaps we can enable HDR at the same time as changing resolution?
-
-                    if ($null -eq $previousHDRStatus -and
-                        $config['trigger_processes'][$runningTriggerProcess.Name] -and $config['trigger_processes'][$runningTriggerProcess.Name].ContainsKey('enable_hdr'))
-                    {
-                        $enableHDR = $config['trigger_processes'][$runningTriggerProcess.Name]['enable_hdr'];
-
-                        if ($enableHDR -isnot [bool])
-                        {
-                            throw "Invalid enable_hdr value specified in config for trigger process '$($runningTriggerProcess.Name)': $enableHDR"
-                        }
-
-                        # Save current HDR status to restore when trigger process exits
-                        $previousHDRStatus = Get-HDRStatus
-
-                        if ($null -eq $previousHDRStatus)
-                        {
-                            # Get-HDRStatus returning null suggests HDR is not supported or an error occurred
-                            Write-Warning "enabled_hdr is set but HDR is not supported or an error occured establishing HDR status"
-                            continue
-                        }
-                        else
-                        {
-                            # Set HDR status
-                            Set-HDRStatus -Enabled $enableHDR
-                        }
-                    }
-
-                    # could just break here if we only want to process the first trigger process
+                    # could just break here if we only want to process the first trigger process appearance?
                 }
                 # end foreach trigger process
 
@@ -2611,6 +2363,7 @@ namespace TaskTamer
                 }
 
 
+                # this is rarely necessary because the code waiting for trigger processes to close is very CPU efficient
                 if ($config['low_priority_waiting'])
                 {
                     $scriptProcess = Get-Process -Id $PID
@@ -2635,12 +2388,23 @@ namespace TaskTamer
                 Write-Host "**** Taming target processes..."
                 $throttledProcesses = $true
 
+
+                # Do the throttle operation!
                 Set-TargetProcessesState -Throttle -Launcher $launcher | Format-TableFancy -ColumnHeadings $COLUMN_HEADINGS -ColumnFormats $COLUMN_FORMATS
 
                 if ($config['exec_post_throttle'])
                 {
                     Write-Verbose "Invoking post-throttle custom commands..."
                     Invoke-CustomCmds -Commands $config['exec_post_throttle']
+                }
+
+
+                # FIXME: this is probably pointless in cases like GW2-64 as the initial process may have terminated and spawned a new one
+                # which will mean a resume operation occurs immediately anyway
+                if ($config['delay_before_monitor_trigger_close'] -and $config['delay_before_monitor_trigger_close'] -gt 0)
+                {
+                    Write-Host "**** Waiting for $($config['delay_before_monitor_trigger_close'])s before checking for trigger process exit..." -ForegroundColor Cyan
+                    Start-Sleep -Seconds $config['delay_before_monitor_trigger_close']
                 }
 
 
@@ -2716,15 +2480,6 @@ namespace TaskTamer
                 }
 
 
-                if ($null -ne $previousHDRStatus)
-                {
-                    # Restore original HDR status
-                    #Write-Host "[$(Get-Date -Format 'HH:mm:ss')] **** Restoring HDR status" -ForegroundColor Cyan
-                    Set-HDRStatus -Enabled $previousHDRStatus
-                    $previousHDRStatus = $null
-                }
-
-
                 if ($config['show_notifications'])
                 {
                     New-BurntToastNotification -Text "All trigger processes exited", "Resuming target processes." -AppLogo $playIconPath -UniqueIdentifier "TaskTamer" -Sound IM -Header $notificationsHeader
@@ -2755,41 +2510,34 @@ namespace TaskTamer
                         Write-Host "overwatch2_config_patch set. Waiting for write lock to $ow2ConfigFilePath ..."
                         Start-Sleep -Seconds 2  # you might be able to remove this
 
-                        if (Wait-ForFileUnlock -Path $ow2ConfigFilePath)
+                        Write-Host "File unlocked.  Checking for 'BroadcastMarginLeft'..."
+                        $contents = Get-Content -Raw -Encoding UTF8 -Path $ow2ConfigFilePath
+
+                        # normalise line endings to Windows style (shouldn't be necessary)
+                        #$contents = $contents -replace '\r?\n', "`r`n"
+
+                        # (?m) enables multiline mode
+                        # https://learn.microsoft.com/en-us/dotnet/standard/base-types/regular-expression-options#multiline-mode
+                        # but $ will not recognize the carriage return/line feed character combination (\r\n) as $ always ignores any carriage return (\r).
+                        # To end your match with either \r\n or \n, use the subexpression \r?$ instead of just $. Note that this will make the \r part of the match.
+                        $regex = '(?m)^BroadcastMarginLeft\s*=\s*".*?"(\r?)$'
+                        $replacement = 'BroadcastMarginLeft = "1.000000"$1'
+
+                        $newContents = $contents -replace $regex, $replacement
+
+                        if ($contents -ne $newContents)
                         {
-                            Write-Host "File unlocked.  Checking for 'BroadcastMarginLeft'..."
-                            $contents = Get-Content -Raw -Encoding UTF8 -Path $ow2ConfigFilePath
+                            # FIXME: bug w.r.t. ShowIntro = "0" ended up on the ini file repeated times
+                            # but possibly it was caused by writing conflict between Overwatch and this function
+                            Write-Host "**** Patching $ow2ConfigFilePath to fix 'BroadcastMarginLeft'..." -ForegroundColor Cyan
 
-                            # normalise line endings to Windows style (shouldn't be necessary)
-                            #$contents = $contents -replace '\r?\n', "`r`n"
-
-                            # (?m) enables multiline mode
-                            # https://learn.microsoft.com/en-us/dotnet/standard/base-types/regular-expression-options#multiline-mode
-                            # but $ will not recognize the carriage return/line feed character combination (\r\n) as $ always ignores any carriage return (\r).
-                            # To end your match with either \r\n or \n, use the subexpression \r?$ instead of just $. Note that this will make the \r part of the match.
-                            $regex = '(?m)^BroadcastMarginLeft\s*=\s*".*?"(\r?)$'
-                            $replacement = 'BroadcastMarginLeft = "1.000000"$1'
-
-                            $newContents = $contents -replace $regex, $replacement
-
-                            if ($contents -ne $newContents)
-                            {
-                                # FIXME: bug w.r.t. ShowIntro = "0" ended up on the ini file repeated times
-                                # but possibly it was caused by writing conflict between Overwatch and this function
-                                Write-Host "**** Patching $ow2ConfigFilePath to fix 'BroadcastMarginLeft'..." -ForegroundColor Cyan
-
-                                # Write the updated content back to the file in UTF-8 without BOM
-                                $utf8WithoutBom = New-Object System.Text.UTF8Encoding $false
-                                [System.IO.File]::WriteAllText($ow2ConfigFilePath, $newContents, $utf8WithoutBom)
-                            }
-                            else
-                            {
-                                Write-Host "No patching required"
-                            }
+                            # Write the updated content back to the file in UTF-8 without BOM
+                            $utf8WithoutBom = New-Object System.Text.UTF8Encoding $false
+                            [System.IO.File]::WriteAllText($ow2ConfigFilePath, $newContents, $utf8WithoutBom)
                         }
                         else
                         {
-                            Write-Warning "Unable to patch $ow2ConfigFilePath as it remains locked"
+                            Write-Host "No patching required"
                         }
                     }
                     catch
@@ -2835,15 +2583,16 @@ namespace TaskTamer
                 {
                     break # out of while()
                 }
-                Start-Sleep -Milliseconds 300
+                Start-Sleep -Milliseconds 500
                 # this value determines the CPU usage of the script while waiting for a trigger process
                 # 250 gives ~ 0.8% CPU usage on Ben's PC
                 # 300 gives ~ 0.6% CPU usage on Ben's PC
+                # the average time to detect will be half the sleep time, so 125ms for 250ms sleep, 150ms for 300ms sleep
 
                 <#
-                # this method lets you wait longer before polling again for trigger processes
-                # but still respond quickly to a keypress
-                if (Wait-ForKeyPress -Milliseconds 250 -KeyCharacter "Q")
+                # alternatively, using Wait-ForKeyPress instead of Test-KeyPress and Start-Sleep,
+                # we can use a longer sleep time (e.g. 1s+) and still respond quickly to a keypress
+                if (Wait-ForKeyPress -Milliseconds 1000 -KeyCharacter "Q")
                 {
                     break # out of while()
                 }
